@@ -1,0 +1,546 @@
+"""
+pypi_downloader.py - A Python script to download packages from PyPI mirrors
+with automatic fallback mechanism when mirrors fail.
+"""
+
+import json
+import hashlib
+from pathlib import Path,PurePosixPath
+import re
+from typing import List, Optional, Tuple, Dict, Any
+import asyncio
+import argparse
+import aiohttp
+from loguru import logger
+from rich.console import Console
+from rich.table import Table
+from urllib.parse import  urlparse, urlunparse
+
+class PackageDownloader:
+    """
+    A class designed to download Python packages from multiple PyPI mirrors with fallback.
+
+    Supports parsing requirements files, fetching package metadata from multiple mirrors,
+    rewriting download URLs, and downloading files asynchronously with concurrency control.
+    Provides detailed status reporting and automatic mirror switching on failure.
+    """
+
+    PYPI_MIRRORS = [
+        "http://mirrors.aliyun.com/pypi",
+        "https://mirrors.cloud.tencent.com/pypi",
+        "https://mirror.nju.edu.cn/pypi",
+        "https://mirror.nyist.edu.cn/pypi",
+        "https://mirror.sjtu.edu.cn/pypi",
+        "https://mirrors.bfsu.edu.cn/pypi",
+        "https://mirrors.jlu.edu.cn/pypi",
+        "https://mirrors.neusoft.edu.cn/pypi",
+        "https://mirrors.njtech.edu.cn/pypi",
+        "https://mirrors.pku.edu.cn/pypi",
+        "https://mirrors.qlu.edu.cn/pypi",
+        "https://mirrors.tuna.tsinghua.edu.cn/pypi",
+        "https://mirrors.ustc.edu.cn/pypi",
+        "https://mirrors.zju.edu.cn/pypi",
+    ]
+
+    DEFAULT_CONCURRENCY: int = 256
+    DEFAULT_RETRIES: int = 5
+
+    def __init__(
+        self,
+        requirements_file: Path,
+        dry_run: bool = False,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        download_dir: Path = Path.cwd() / "packages",
+            ) -> None:
+        """
+        Initialize the PackageDownloader.
+
+        Args:
+            requirements_file: Path to the requirements.txt file.
+            dry_run: If True, only generates URL list without downloading.
+            concurrency: Maximum number of concurrent downloads.
+            download_dir: Directory to save downloaded packages.
+        """
+        self.requirements_file: Path = requirements_file
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.dry_run: bool = dry_run
+        self.semaphore: asyncio.Semaphore = asyncio.Semaphore(concurrency)
+        self.download_urls: List[str] = []
+        self.download_dir = download_dir
+        self.url_list_file = self.download_dir / "url_list.txt"
+        self.timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(
+            total=None, connect=60, sock_read=60
+        )
+        self._current_mirror_idx: int = 0  # Added: Track current mirror index
+        logger.info(
+            f"Using timeout configuration: connect={self.timeout.connect}s, "
+            f"sock_read={self.timeout.sock_read}s"
+        )
+
+    async def get_next_mirror(self) -> str:
+        """
+        Get the next available mirror in the list, cycling back to the first when needed.
+
+        Returns:
+            The URL of the next mirror to try.
+        """
+        self._current_mirror_idx = (self._current_mirror_idx + 1) % len(self.PYPI_MIRRORS)
+        return self.PYPI_MIRRORS[self._current_mirror_idx]
+
+    def current_mirror_base(self, path: str = "") -> str:
+        """
+        生成标准化的镜像基础URL，确保路径以斜杠结尾
+        
+        Args:
+            path: 要追加的路径部分
+            
+        Returns:
+            标准化后的完整URL，保证以斜杠结尾
+        """
+        base_url = self.PYPI_MIRRORS[self._current_mirror_idx]
+        parsed = urlparse(base_url)
+        
+        base_path = PurePosixPath(parsed.path)
+        full_path = Path(base_path / path).resolve(strict=False)
+        
+        path_str = str(full_path)
+        if not path_str.endswith('/'):
+            path_str += '/'
+            
+        return urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            path_str,  # 已确保以斜杠结尾
+            parsed.params,
+            parsed.query,
+            parsed.fragment
+        ))
+
+    @staticmethod
+    def parse_package_line(line: str) -> Optional[Tuple[str, str]]:
+        """
+        Parse a single line from a requirements.txt file to extract package name and version.
+
+        Supports formats like "package==version" or "package[extras]==version".
+        Lines starting with '#' or empty lines are ignored.
+
+        Args:
+            line: The line string to parse.
+
+        Returns:
+            A tuple containing (package_name, version) if parsing succeeds, None otherwise.
+        """
+        line = line.strip()
+        if not line or line.startswith("#"):
+            return None
+        # Regex to capture package name, optional extras, and version.
+        # Group 1: base package name (e.g., "zabbix-utils")
+        # Group 2: extras (e.g., "async") - optional
+        # Group 3: version (e.g., "3.1")
+        match = re.match(r"^([\w\-\.]+)(?:\[([\w,\-]+)\])?==([\w\.\-]+)$", line)
+        if match:
+            base_package_name: str = match.group(1)
+            extras: Optional[str] = match.group(2)
+            version: str = match.group(3)
+
+            full_package_name: str
+            if extras:
+                full_package_name = f"{base_package_name}[{extras}]"
+            else:
+                full_package_name = base_package_name
+
+            return full_package_name, version
+        return None
+
+    async def fetch_metadata(
+        self, package_with_extras: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetch metadata for a package from PyPI mirrors with automatic fallback.
+
+        Args:
+            package_with_extras: The package name, potentially with extras.
+
+        Returns:
+            The package metadata as a dict if successful, None if all mirrors fail.
+        """
+
+        last_exception = None
+        package_for_url: str = re.sub(r"\[.*?\]", "", package_with_extras)
+
+        for _ in range(len(self.PYPI_MIRRORS)):
+            url = f"{self.current_mirror_base('web/json/')}/{package_for_url}"
+            try:
+                logger.debug(f"Trying metadata URL: {url}")
+                assert self.session is not None
+                async with self.session.get(url, timeout=self.timeout) as resp:
+                    content = await resp.read()
+                    try:
+                        return json.loads(content.decode('utf-8'))
+                    except json.JSONDecodeError as e:
+                        raise aiohttp.ClientError(f"Invalid JSON: {str(e)}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_exception = e
+                logger.warning(
+                    f"Mirror {url} failed: {str(e)}. "
+                    f"Trying next mirror..."
+                )
+                await self.get_next_mirror()
+                continue
+            # pylint: disable=W0718 # Catching too general exception Exception
+            except Exception as e:
+                logger.error(
+                    f"An unexpected error occurred fetching metadata for "
+                    f"{package_with_extras} from {url}: {e}"
+                )
+                return None
+
+        logger.error(
+            f"All mirrors failed for {package_with_extras}: {str(last_exception)}"
+        )
+        return None
+
+
+    def find_version_info(
+        self, metadata: Dict[str, Any], version: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Find release information for a specific package version.
+
+        Args:
+            metadata: The full package metadata.
+            version: The version to look up.
+
+        Returns:
+            List of release files if version exists, None otherwise.
+        """
+        return metadata.get("releases", {}).get(version)
+
+    def rewrite_url(self, url: str) -> str:
+        """
+        Rewrite a PyPI download URL to use the current mirror.
+
+        Args:
+            url: The original download URL.
+
+        Returns:
+            The rewritten URL pointing to the current mirror.
+        """
+        if url.startswith("https://files.pythonhosted.org/"):
+            # Replace the official PyPI download host with the mirror's
+            # equivalent path
+            return url.replace(
+                "https://files.pythonhosted.org/packages/",
+                self.current_mirror_base('web/packages/'),
+            )
+        return url
+
+    @staticmethod
+    def get_filename_from_url(url: str) -> str:
+        """
+        Extract filename from a URL.
+
+        Args:
+            url: The URL to parse.
+
+        Returns:
+            The filename part of the URL.
+        """
+        return url.split("/")[-1]
+
+    @staticmethod
+    def compute_hash(file_path: Path, algo: str = "sha256") -> str:
+        """
+        Compute cryptographic hash of a file.
+
+        Args:
+            file_path: Path to the file.
+            algo: Hash algorithm to use.
+
+        Returns:
+            The hexadecimal hash digest.
+        """
+        h = hashlib.new(algo)
+        with file_path.open("rb") as f:
+            # Read file in chunks to handle large files efficiently without
+            # loading entire file into memory
+            # while chunk := f.read(8192):  # Read 8KB chunks
+            #     h.update(chunk)]
+            h.update(f.read()) 
+        return h.hexdigest()
+
+    async def download_file(self, url: str, filename: str) -> bool:
+        """
+        Download a file with retry logic and hash verification.
+
+        Args:
+            url: The file URL to download.
+            filename: The target filename.
+
+        Returns:
+            True if download succeeded or file exists with matching hash.
+        """
+        dest_path: Path = self.download_dir / filename
+        rewritten_url: str = self.rewrite_url(url)
+
+        for attempt in range(1, self.DEFAULT_RETRIES + 1):
+            try:
+                assert self.session is not None, "ClientSession is not initialized."
+                async with self.session.get(
+                    rewritten_url, timeout=self.timeout
+                ) as resp:
+                    resp.raise_for_status()  # Check for HTTP errors (4xx/5xx)
+                    content: bytes = await resp.read()
+
+                    if dest_path.exists():
+                        # Compute hash of existing file for comparison
+                        current_hash: str = self.compute_hash(dest_path)
+                        # Compute hash of newly downloaded content
+                        new_hash: str = hashlib.sha256(content).hexdigest()
+
+                        if current_hash == new_hash:
+                            logger.info(f"Already exists and matches: " f"{filename}")
+                            return True
+                        logger.warning(f"Hash mismatch, re-downloading:" f" {filename}")
+
+                    # Ensure directory exists
+                    self.download_dir.mkdir(parents=True, exist_ok=True)
+                    # Write the downloaded content to file
+                    dest_path.write_bytes(content)
+                    logger.info(f"Downloaded: {filename}")
+                    return True
+            except aiohttp.ClientError as e:
+                logger.warning(
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: Client error "
+                    f"downloading {rewritten_url}: {e}"
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: Timeout (no data "
+                    f"received for {self.timeout.sock_read}s) downloading "
+                    f"{rewritten_url}"
+                )
+            # pylint: disable=W0718 # Catching too general exception Exception
+            except Exception as e:
+                logger.warning(
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: An unexpected "
+                    f"error downloading {rewritten_url}: {e}"
+                )
+        logger.error(
+            f"Failed to download after {self.DEFAULT_RETRIES} retries: {filename}"
+        )
+        return False
+
+    async def process_package(self, line: str) -> Dict[str, Any]:
+        """
+        Process a single package definition from requirements.txt.
+
+        Args:
+            line: The line from requirements.txt.
+
+        Returns:
+            Dictionary containing package processing status.
+        """
+        # parse_package_line is now called within run() to filter lines before
+        # task creation, so this method will only receive valid lines that can
+        # be parsed.
+        parsed: Optional[Tuple[str, str]] = self.parse_package_line(line)
+        if not parsed:
+            # This case should ideally not be hit if lines are pre-filtered,
+            # but included for robustness.
+            return {
+                "package": line.strip() if line.strip() else "N/A",
+                "version": "N/A",
+                "status": "Error (Pre-filter)",
+                "details": "Unexpected unparsable line",
+            }
+        name, version = parsed
+        package_status: Dict[str, Any] = {
+            "package": name,
+            "version": version,
+            "status": "Failed",
+            "details": "",
+        }
+
+        async with self.semaphore:
+            try:
+                metadata: Optional[Dict[str, Any]] = await self.fetch_metadata(name)
+                if not metadata:
+                    package_status["details"] = "Failed to fetch metadata"
+                    return package_status
+
+                version_info: Optional[List[Dict[str, Any]]] = self.find_version_info(
+                    metadata, version
+                )
+                if not version_info:
+                    package_status["details"] = "No release info found"
+                    return package_status
+
+                download_success_count = 0
+                total_files = len(version_info)
+
+                for file_info in version_info:
+                    url: str = file_info["url"]
+                    filename: str = file_info["filename"]
+                    final_url: str = self.rewrite_url(url)
+                    self.download_urls.append(final_url)
+
+                    if self.dry_run:
+                        logger.info(f"[Dry-run] Would download: {final_url}")
+                        download_success_count += 1  # Count as success in dry-run
+                    else:
+                        if await self.download_file(final_url, filename):
+                            download_success_count += 1
+
+                if total_files > 0 and download_success_count == total_files:
+                    package_status["status"] = "Synchronized"
+                    package_status["details"] = f"All {total_files} file(s) processed"
+                elif total_files > 0 and download_success_count > 0:
+                    package_status["status"] = "Partial Sync"
+                    package_status["details"] = (
+                        f"{download_success_count}/{total_files} file(s) processed"
+                    )
+                elif total_files == 0:
+                    package_status["status"] = "No Files"
+                    package_status["details"] = (
+                        "No downloadable files found for this version"
+                    )
+                else:
+                    package_status["status"] = "Failed"
+                    package_status["details"] = "No files downloaded"
+            # pylint: disable=W0718 # Catching too general exception Exception
+            except Exception as e:
+                logger.exception(
+                    f"An unhandled error occurred while processing package "
+                    f"line '{line.strip()}': {e}"
+                )
+                package_status["details"] = f"Unhandled error: {e}"
+        return package_status
+
+    async def run(self) -> List[Dict[str, Any]]:
+        """
+        Main execution method to process all packages.
+
+        Returns:
+            List of package status dictionaries.
+        """
+        logger.info(
+            f"Starting package download process from: " f"{self.requirements_file}"
+        )
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+
+        async with aiohttp.ClientSession() as self.session:
+            valid_lines: List[str] = []
+            with self.requirements_file.open("r", encoding="utf-8") as f:
+                for line in f:
+                    stripped_line = line.strip()
+                    # Only add lines that are not empty and not comments
+                    if stripped_line and not stripped_line.startswith("#"):
+                        # Further check if it's a parseable package line
+                        if self.parse_package_line(line):
+                            valid_lines.append(line)
+                        else:
+                            logger.warning(f"Skipping unparseable line: {line.strip()}")
+
+            all_package_results: List[Dict[str, Any]] = await asyncio.gather(
+                *(self.process_package(line) for line in valid_lines)
+            )
+
+            if self.download_urls:
+                self.url_list_file.write_text(
+                    "\n".join(self.download_urls), encoding="utf-8"
+                )
+                logger.info(f"✔ URL list saved to {self.url_list_file}")
+            else:
+                logger.info(
+                    "No download URLs were collected. URL list file "
+                    "will not be created."
+                )
+
+        return all_package_results  # Return the collected results
+
+
+def main() -> None:
+    """Main entry point for command-line execution."""
+    parser = argparse.ArgumentParser(description="PyPI Package Downloader")
+    parser.add_argument(
+        "requirements",
+        type=str,
+        nargs="?",
+        default=str(Path.cwd() / "requirements.txt"),
+        help="Path to the requirements.txt file (default: ./requirements.txt)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only generate URL list without downloading",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=256,
+        help="Maximum concurrent downloads (default: 256)",
+    )
+    parser.add_argument(
+        "--download-dir",
+        type=str,
+        default=str(Path.cwd() / "packages"),
+        help="Directory to save downloads (default: ./packages)",
+    )
+
+    args = parser.parse_args()
+
+    if not Path(args.requirements).exists():
+        parser.print_help()
+        return
+        
+    download_dir = Path(args.download_dir)
+
+    logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
+    # Pass the timeout arguments directly to the PackageDownloader constructor
+    downloader = PackageDownloader(
+        requirements_file=Path(args.requirements),
+        dry_run=args.dry_run,
+        concurrency=args.concurrency,
+        download_dir=download_dir,
+    )
+
+    package_sync_results: List[Dict[str, Any]] = asyncio.run(downloader.run())
+
+    console = Console()
+    table = Table(
+        title="Package Synchronization Summary",
+        show_header=True,
+        header_style="bold magenta",
+    )
+
+    table.add_column("Package", style="cyan", no_wrap=True)
+    table.add_column("Version", style="green")
+    table.add_column("Status", justify="center", style="bold")
+    table.add_column("Details", style="dim")
+
+    for result in package_sync_results:
+        package = result.get("package", "N/A")
+        version = result.get("version", "N/A")
+        status = result.get("status", "Unknown")
+        details = result.get("details", "")
+
+        status_style = ""
+        if status == "Synchronized":
+            status_style = "bold green"
+        elif status == "Partial Sync":
+            status_style = "bold yellow"
+        elif status == "Failed":
+            status_style = "bold red"
+        elif status == "No Files":
+            status_style = "blue"
+        elif status == "Error (Pre-filter)":
+            status_style = "bold red on black"
+
+        table.add_row(package, version, f"[{status_style}]{status}[/]", details)
+
+    console.print(table)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,22 @@
+[project]
+name = "pypi-downloader"
+version = "0.1.1"
+description = "Async PyPI package downloader with mirror fallback"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.11",
+    "loguru>=0.6",
+    "rich>=12.0",
+]
+license = {text = "MIT"}
+readme = "README.md"
+authors = [
+    { name = "X4068", email = "54296390@qq.com" }
+]
+
+[project.scripts]
+pypi-downloader = "pypi_downloader.cli:main"
+    
+[build-system]
+requires = ["uv_build>=0.8.3,<0.9.0"]
+build-backend = "uv_build"
