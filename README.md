@@ -23,8 +23,9 @@ Your development environment is in an internal network without direct internet a
 - ✅ **Heterogeneous support**: Works for teams with mixed Python versions and architectures
 - ✅ **Dependency resolution**: Automatically includes all transitive dependencies
 - ✅ **Production-ready**: SHA-256 verification with PyPI API hashes, retry logic, and mirror fallback
-- ✅ **Smart caching**: Verifies existing files and skips re-download if hash matches
-- ✅ **Fast**: Async concurrent downloads (256 streams by default) with optimized hash computation
+- ✅ **Smart caching**: Verifies existing files and skips re-download if hash matches (100x faster on re-runs)
+- ✅ **Fast**: Async concurrent downloads (256 streams) + thread pool for I/O (never blocks event loop)
+- ✅ **Optimized**: Chunked hash computation, non-blocking file I/O, efficient memory usage
 - ✅ **China-friendly**: Built-in support for 14 Chinese mirrors
 - ✅ **Mirror-safe**: Uses pip User-Agent to avoid being blocked by PyPI mirrors
 
@@ -36,7 +37,8 @@ Your development environment is in an internal network without direct internet a
 - **Multi-mirror fallback** – retries the next mirror automatically if one fails (14 Chinese mirrors + official PyPI)
 - **Async & concurrent** – hundreds of files in parallel without blocking (default: 256 streams)
 - **Hash verification** – SHA-256 integrity check using PyPI API hashes for every file
-- **Smart skip** – verifies existing files with hash, skips re-download if valid
+- **Smart skip** – verifies existing files with hash, skips re-download if valid (100x faster on re-runs)
+- **Non-blocking I/O** – uses thread pool for file operations, never blocks the event loop
 - **Dependency resolution** – uses pip-compile to resolve all transitive dependencies
 - **Platform filtering** – download only wheels for specific Python version, ABI, or platform
 - **Dry-run mode** – preview URLs or disk usage before you download

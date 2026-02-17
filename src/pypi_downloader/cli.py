@@ -16,6 +16,7 @@ from loguru import logger
 from rich.console import Console
 from rich.table import Table
 from urllib.parse import  urlparse, urlunparse
+from concurrent.futures import ThreadPoolExecutor
 
 import json
 import hashlib
@@ -527,8 +528,11 @@ class PackageDownloader:
         dest_path: Path = self.download_dir / filename
         rewritten_url: str = self.rewrite_url(url)
 
-        # Check if file already exists and verify hash if provided
-        if dest_path.exists():
+        # Check if file already exists (async)
+        loop = asyncio.get_event_loop()
+        file_exists = await loop.run_in_executor(None, dest_path.exists)
+
+        if file_exists:
             if expected_hash:
                 # Extract hash value from "sha256=..." format
                 if expected_hash.startswith("sha256="):
@@ -536,8 +540,8 @@ class PackageDownloader:
                 else:
                     expected_hash_value = expected_hash
 
-                # Compute hash of existing file
-                existing_hash = self.compute_hash(dest_path)
+                # Compute hash of existing file asynchronously
+                existing_hash = await self.compute_hash_async(dest_path)
 
                 if existing_hash == expected_hash_value:
                     logger.debug(f"File exists with valid hash, skipping: {filename}")
@@ -561,7 +565,7 @@ class PackageDownloader:
                     resp.raise_for_status()  # Check for HTTP errors (4xx/5xx)
                     content: bytes = await resp.read()
 
-                    # Verify hash if provided
+                    # Verify hash if provided (in memory, fast)
                     if expected_hash:
                         if expected_hash.startswith("sha256="):
                             expected_hash_value = expected_hash[7:]
@@ -577,10 +581,15 @@ class PackageDownloader:
                             )
                             return False
 
-                    # Ensure directory exists
-                    self.download_dir.mkdir(parents=True, exist_ok=True)
-                    # Write the downloaded content to file
-                    dest_path.write_bytes(content)
+                    # Ensure directory exists (async)
+                    await loop.run_in_executor(
+                        None,
+                        lambda: self.download_dir.mkdir(parents=True, exist_ok=True)
+                    )
+
+                    # Write the downloaded content to file (async)
+                    await loop.run_in_executor(None, dest_path.write_bytes, content)
+
                     logger.info(f"Downloaded: {filename}")
                     return True
             except aiohttp.ClientError as e:
@@ -739,6 +748,18 @@ class PackageDownloader:
             "User-Agent": f"pip/24.0 (python {'.'.join(map(str, __import__('sys').version_info[:3]))})"
         }
 
+        # For I/O-bound operations (file read/write), ThreadPoolExecutor is actually better:
+        # - File I/O releases GIL, so threads can work in parallel
+        # - No process creation overhead
+        # - Shared memory (no pickling overhead)
+        import os
+        max_workers = min(32, (os.cpu_count() or 1) * 4)
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        loop.set_default_executor(executor)
+
+        logger.info(f"Using {max_workers} threads for I/O operations (file I/O releases GIL)")
+
         async with aiohttp.ClientSession(headers=headers) as self.session:
             valid_lines: List[str] = []
             with self.requirements_file.open("r", encoding="utf-8") as f:
@@ -766,6 +787,9 @@ class PackageDownloader:
                     "No download URLs were collected. URL list file "
                     "will not be created."
                 )
+
+        # Shutdown executor
+        executor.shutdown(wait=True)
 
         return all_package_results  # Return the collected results
 
