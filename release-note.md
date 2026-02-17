@@ -1,5 +1,23 @@
 # Release Notes
 
+## v0.4.2 (2026-02-18)
+
+### 🐛 Bug Fixes
+
+#### Fixed Log Line Wrapping
+- **Truncate long messages**: Messages longer than 120 characters are now truncated with "..."
+- **Prevents line wrapping**: Long URLs no longer cause display to exceed 20 lines
+- Example:
+  - Before: `Downloading: http://mirrors.aliyun.com/pypi/web/packages/e8/e3/8519496759b4f15d73323b00f70bde3eb097efd177382a4bed3899162a9e/black-24.1.1...` (wraps to 2 lines)
+  - After: `Downloading: http://mirrors.aliyun.com/pypi/web/packages/e8/e3/8519496759b4f15d73323b00f70bde3eb097efd177382a4bed389...` (1 line)
+
+#### Reduced pip-compile Verbosity
+- **Removed stdout logging**: No longer prints pip-compile's verbose output
+- **Keeps stderr logging**: Still logs errors and warnings (DEBUG level)
+- Cleaner output during dependency resolution
+
+---
+
 ## v0.4.1 (2026-02-18)
 
 ### 🔧 Improvements

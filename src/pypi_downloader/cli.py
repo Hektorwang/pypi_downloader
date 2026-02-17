@@ -61,7 +61,12 @@ class RichLogSink:
 
     def write(self, message):
         """写入日志消息"""
-        self.lines.append(message.rstrip())
+        # 截断过长的消息（避免换行）
+        max_width = 120  # 最大宽度
+        msg = message.rstrip()
+        if len(msg) > max_width:
+            msg = msg[:max_width-3] + "..."
+        self.lines.append(msg)
         self._update_display()
 
     def init_progress(self, total: int):
@@ -1240,12 +1245,7 @@ def main() -> None:
                 pip_compile_cmd, capture_output=True, text=True, check=True
             )
             
-            # Log pip-compile output
-            if result.stdout:
-                logger.info("pip-compile output:")
-                for line in result.stdout.strip().split('\n'):
-                    logger.info(f"  {line}")
-            
+            # Log pip-compile stderr (errors/warnings) only
             if result.stderr:
                 logger.debug("pip-compile stderr:")
                 for line in result.stderr.strip().split('\n'):
