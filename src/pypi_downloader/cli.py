@@ -18,11 +18,12 @@ from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 from loguru import logger
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
+from rich.panel import Panel
 
 
 class RichLogSink:
@@ -49,7 +50,13 @@ class RichLogSink:
     def start(self):
         """启动 Live 显示"""
         if not self.live:
-            self.live = Live(self._render(), console=self.console, refresh_per_second=10)
+            # vertical_overflow="visible" 让内容从底部开始
+            self.live = Live(
+                self._render(), 
+                console=self.console, 
+                refresh_per_second=10,
+                vertical_overflow="visible"
+            )
             self.live.start()
 
     def write(self, message):
@@ -70,19 +77,19 @@ class RichLogSink:
 
     def _render(self):
         """渲染显示内容"""
-        # 日志行
-        log_text = Text("\n".join(self.lines))
+        # 日志文本
+        log_lines = list(self.lines)
+        log_text = "\n".join(log_lines) if log_lines else ""
         
-        # 如果有进度条，添加分隔线和进度条
+        # 如果有进度条，使用 Group 组合日志和进度条
         if self.task_id is not None:
-            return Text.assemble(
-                log_text,
-                "\n",
-                ("─" * 80, "dim"),
-                "\n",
+            separator = "─" * 80
+            return Group(
+                Text(log_text),
+                Text(separator, style="dim"),
                 self.progress
             )
-        return log_text
+        return Text(log_text)
 
     def _update_display(self):
         """更新显示内容"""
