@@ -9,6 +9,8 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,8 +19,84 @@ from urllib.parse import urlparse, urlunparse
 import aiohttp
 from loguru import logger
 from rich.console import Console
+from rich.live import Live
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
 from rich.table import Table
-from tqdm import tqdm
+from rich.text import Text
+
+
+class RichLogSink:
+    """使用 Rich Live 显示最后 N 行日志和进度条"""
+
+    def __init__(self, max_lines=19):
+        """
+        Args:
+            max_lines: 最多显示的日志行数（不包括进度条）
+        """
+        self.max_lines = max_lines
+        self.lines = deque(maxlen=max_lines)
+        self.console = Console(file=sys.stderr)
+        self.live = None
+        self.progress = Progress(
+            TextColumn("[cyan]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("{task.completed}/{task.total} files"),
+            TimeRemainingColumn(),
+        )
+        self.task_id = None
+
+    def start(self):
+        """启动 Live 显示"""
+        if not self.live:
+            self.live = Live(self._render(), console=self.console, refresh_per_second=10)
+            self.live.start()
+
+    def write(self, message):
+        """写入日志消息"""
+        self.lines.append(message.rstrip())
+        self._update_display()
+
+    def init_progress(self, total: int):
+        """初始化进度条"""
+        self.task_id = self.progress.add_task("Downloading", total=total)
+        self._update_display()
+
+    def update_progress(self, advance: int = 1):
+        """更新进度"""
+        if self.task_id is not None:
+            self.progress.update(self.task_id, advance=advance)
+            self._update_display()
+
+    def _render(self):
+        """渲染显示内容"""
+        # 日志行
+        log_text = Text("\n".join(self.lines))
+        
+        # 如果有进度条，添加分隔线和进度条
+        if self.task_id is not None:
+            return Text.assemble(
+                log_text,
+                "\n",
+                ("─" * 80, "dim"),
+                "\n",
+                self.progress
+            )
+        return log_text
+
+    def _update_display(self):
+        """更新显示内容"""
+        if self.live:
+            self.live.update(self._render())
+
+    def flush(self):
+        pass
+
+    def stop(self):
+        """停止 Live 显示"""
+        if self.live:
+            self.live.stop()
+            self.live = None
 
 
 class PackageDownloader:
@@ -99,10 +177,11 @@ class PackageDownloader:
         self.abi = abi
         self.platform = platform
         self.all_versions = all_versions
-        
+
         # Progress bar fields
-        self.progress_bar: Optional[tqdm] = None
         self.total_files: int = 0
+        self.completed_files: int = 0
+        self.rich_sink: Optional[RichLogSink] = None
 
         logger.info(
             f"Using timeout configuration: connect={self.timeout.connect}s, "
@@ -479,6 +558,7 @@ class PackageDownloader:
             Integer count of files that match filters and would be downloaded.
         """
         count = 0
+        skipped_py2 = 0
 
         # Determine which versions to count
         if self.all_versions:
@@ -494,11 +574,25 @@ class PackageDownloader:
             for file_info in version_files:
                 filename = file_info.get("filename", "")
 
-                # Apply filters
+                # Apply filters (includes Python 2 filtering)
                 if self.matches_filter(
                     filename, self.python_version, self.abi, self.platform
                 ):
                     count += 1
+                else:
+                    # Check if it was skipped due to Python 2
+                    wheel_info = self.parse_wheel_filename(filename)
+                    if wheel_info:
+                        file_python_tags = wheel_info["python"].split(".")
+                        is_py2_only = ("py2" in file_python_tags and not any(
+                            tag.startswith("py3") or tag.startswith("cp3") 
+                            for tag in file_python_tags
+                        ))
+                        if is_py2_only:
+                            skipped_py2 += 1
+
+        if skipped_py2 > 0:
+            logger.debug(f"Skipped {skipped_py2} Python 2 only files in count")
 
         return count
 
@@ -575,38 +669,34 @@ class PackageDownloader:
         )
 
     def _init_progress_bar(self, total: int) -> None:
-        """Initialize tqdm progress bar with total file count."""
+        """Initialize progress tracking with total file count."""
         try:
-            self.progress_bar = tqdm(
-                total=total,
-                desc="Downloading",
-                unit="file",
-                bar_format="{desc}: {n}/{total} files [{percentage:3.0f}%] | {elapsed}<{remaining}",
-                position=0,
-                leave=True,
-            )
-            logger.info(f"Initialized progress bar with {total} total files")
+            self.total_files = total
+            self.completed_files = 0
+            if self.rich_sink:
+                self.rich_sink.init_progress(total)
+            logger.info(f"Initialized progress tracking with {total} total files")
         except Exception as e:
             logger.warning(
-                f"Failed to initialize progress bar: {e}. Continuing with log-only mode."
+                f"Failed to initialize progress tracking: {e}. Continuing with log-only mode."
             )
-            self.progress_bar = None
 
     def _update_progress(self, n: int = 1) -> None:
-        """Update progress bar by n files (thread-safe, tqdm handles locking)."""
-        if self.progress_bar:
-            try:
-                self.progress_bar.update(n)
-            except Exception as e:
-                logger.debug(f"Progress bar update failed: {e}")
+        """Update progress by n files."""
+        try:
+            self.completed_files += n
+            if self.rich_sink:
+                self.rich_sink.update_progress(n)
+        except Exception as e:
+            logger.debug(f"Progress update failed: {e}")
 
     def _close_progress_bar(self) -> None:
-        """Close progress bar."""
-        if self.progress_bar:
-            try:
-                self.progress_bar.close()
-            except Exception as e:
-                logger.debug(f"Progress bar close failed: {e}")
+        """Close progress tracking."""
+        try:
+            # Progress bar will be stopped when rich_sink is stopped
+            pass
+        except Exception as e:
+            logger.debug(f"Progress close failed: {e}")
 
     async def download_file(
         self, url: str, filename: str, expected_hash: Optional[str] = None
@@ -781,7 +871,15 @@ class PackageDownloader:
                     versions_to_download[version] = version_info
 
                 download_success_count = 0
-                total_files = sum(len(files) for files in versions_to_download.values())
+                # Count only files that will actually be downloaded (after filtering)
+                total_files = 0
+                for ver, version_files in versions_to_download.items():
+                    for file_info in version_files:
+                        filename = file_info.get("filename", "")
+                        if self.matches_filter(
+                            filename, self.python_version, self.abi, self.platform
+                        ):
+                            total_files += 1
 
                 # Collect all download tasks for concurrent execution
                 download_tasks = []
@@ -947,34 +1045,39 @@ class PackageDownloader:
         return all_package_results  # Return the collected results
 
 
-def configure_logging() -> None:
-    """Configure loguru with tqdm-compatible terminal output and file logging."""
+def configure_logging() -> RichLogSink:
+    """Configure loguru with Rich Live display and file logging."""
     # Remove default handler
     logger.remove()
 
-    # Add terminal sink (INFO+, using tqdm.write for compatibility)
+    # Create Rich sink for terminal display (last 19 lines + 1 progress line = 20 total)
+    rich_sink = RichLogSink(max_lines=19)
+    rich_sink.start()
+
+    # Add Rich sink (INFO+)
     logger.add(
-        lambda msg: tqdm.write(msg, end=""),
+        rich_sink,
         level="INFO",
-        colorize=True,
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+        format="{time:HH:mm:ss} | {level: <8} | {message}",
     )
 
     # Add file sink (DEBUG+, with rotation)
     logger.add(
         "./pypi-downloader.log",
         level="DEBUG",
-        rotation="16 MB",
+        rotation="10 MB",
         retention=3,
         encoding="utf-8",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
     )
 
+    return rich_sink
+
 
 def main() -> None:
     """Main entry point for command-line execution."""
     # Configure logging before anything else
-    configure_logging()
+    rich_sink = configure_logging()
     
     parser = argparse.ArgumentParser(description="PyPI Package Downloader")
     parser.add_argument(
@@ -1177,8 +1280,14 @@ def main() -> None:
         save_url_list=args.save_url_list,
         url_list_path=url_list_path,
     )
+    
+    # Set rich_sink for progress tracking
+    downloader.rich_sink = rich_sink
 
     package_sync_results: List[Dict[str, Any]] = asyncio.run(downloader.run())
+    
+    # Stop rich sink before showing final table
+    rich_sink.stop()
 
     console = Console()
     table = Table(

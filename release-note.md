@@ -1,5 +1,115 @@
 # Release Notes
 
+## v0.4.0 (2026-02-18)
+
+### 🎉 Major UI Overhaul
+
+#### Rich Live Display - Fixed 20-Line Terminal Output
+- **Replaced tqdm with Rich Live**: Complete UI redesign using Rich's Live display
+- **Fixed display area**: All logs and progress confined to exactly 20 lines on screen
+  - Lines 1-19: Scrolling log messages (most recent 19 lines)
+  - Line 20: Real-time progress bar with statistics
+- **No more screen clutter**: Logs scroll within the fixed area, terminal stays clean
+- **Better progress bar**: Rich's native progress bar with:
+  - Visual progress bar
+  - Percentage completion
+  - File count (completed/total)
+  - Time remaining estimate
+
+#### Visual Improvements
+- **Separator line**: Clear visual separation between logs and progress bar
+- **Color-coded logs**: Time, level, and message with appropriate styling
+- **Smooth updates**: 10 refreshes per second for fluid display
+- **Clean exit**: Display stops cleanly before showing final summary table
+
+### 🔧 Technical Changes
+
+#### Removed tqdm Dependency
+- **No longer needed**: Rich provides superior progress tracking
+- **Simpler dependencies**: One less package to install
+- **Better integration**: Rich handles both logging and progress natively
+
+#### New RichLogSink Class
+```python
+class RichLogSink:
+    """使用 Rich Live 显示最后 N 行日志和进度条"""
+    - Manages deque of last 19 log lines
+    - Integrates Rich Progress for progress bar
+    - Renders combined view (logs + separator + progress)
+    - Thread-safe updates
+```
+
+### 📊 Display Layout
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ 10:23:45 | INFO     | Fetching metadata for numpy...       │ Line 1
+│ 10:23:46 | INFO     | Fetching metadata for pandas...      │ Line 2
+│ 10:23:47 | DEBUG    | Downloading: https://...             │ Line 3
+│ 10:23:48 | INFO     | Downloaded: numpy-1.26.4-cp311...    │ Line 4
+│ ...                                                          │ ...
+│ 10:23:59 | INFO     | Downloaded: pandas-2.2.0-cp311...    │ Line 19
+├──────────────────────────────────────────────────────────────┤
+│ Downloading ████████████░░░░░░░░  60% 150/250 files 0:02:30 │ Line 20
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 📦 Dependencies
+
+#### Updated Core Dependencies
+- aiohttp >= 3.11
+- loguru >= 0.6
+- rich >= 12.0 (now handles both logging and progress)
+- ~~tqdm >= 4.65.0~~ (REMOVED)
+
+### 🎯 Benefits
+
+1. **Cleaner terminal**: Fixed 20-line display prevents screen overflow
+2. **Better visibility**: Always see the most recent logs and current progress
+3. **Professional look**: Rich's styling makes output more polished
+4. **Simpler codebase**: One UI library instead of two (tqdm + rich)
+5. **Better performance**: Rich's Live display is optimized for frequent updates
+
+### 🔄 Breaking Changes
+
+None - all command-line options and functionality remain the same. Only the visual display has changed.
+
+---
+
+## v0.3.2 (2026-02-18)
+
+### 🐛 Bug Fix
+
+#### Fixed "Partial Sync" Status for Filtered Files
+- **Critical fix**: Total file count now correctly excludes filtered files (Python 2, platform mismatches, etc.)
+- **Before**: `total_files` included ALL files, but only filtered files were downloaded
+  - Example: Package has 112 files (19 Python 2 only), downloads 93 → shows "Partial Sync: 93/112"
+- **After**: `total_files` only counts files that will actually be downloaded
+  - Example: Package has 112 files (19 Python 2 only), downloads 93 → shows "Synchronized: All 93 files"
+
+#### Impact
+- Eliminates false "Partial Sync" warnings when Python 2 or other filtered files are skipped
+- Status now accurately reflects actual download success rate
+- "Synchronized" status means all downloadable files (after filtering) were successfully downloaded
+
+#### Technical Details
+```python
+# Before (incorrect)
+total_files = sum(len(files) for files in versions_to_download.values())
+# Counted ALL files including Python 2
+
+# After (correct)
+total_files = 0
+for ver, version_files in versions_to_download.items():
+    for file_info in version_files:
+        filename = file_info.get("filename", "")
+        if self.matches_filter(filename, ...):  # Apply same filters
+            total_files += 1
+# Only counts files that will actually be downloaded
+```
+
+---
+
 ## v0.3.1 (2026-02-18)
 
 ### 🐛 Bug Fix
