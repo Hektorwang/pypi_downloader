@@ -5,6 +5,20 @@ with automatic fallback mechanism when mirrors fail.
 
 import json
 import hashlib
+import subprocess
+from pathlib import Path,PurePosixPath
+import re
+from typing import List, Optional, Tuple, Dict, Any
+import asyncio
+import argparse
+import aiohttp
+from loguru import logger
+from rich.console import Console
+from rich.table import Table
+from urllib.parse import  urlparse, urlunparse
+
+import json
+import hashlib
 from pathlib import Path,PurePosixPath
 import re
 from typing import List, Optional, Tuple, Dict, Any
@@ -50,8 +64,12 @@ class PackageDownloader:
         requirements_file: Path,
         dry_run: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
-        download_dir: Path = Path.cwd() / "packages",
-            ) -> None:
+        download_dir: Path = Path.cwd() / "pypi",
+        use_cn_mirrors: bool = False,
+        python_version: Optional[str] = None,
+        abi: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> None:
         """
         Initialize the PackageDownloader.
 
@@ -60,6 +78,10 @@ class PackageDownloader:
             dry_run: If True, only generates URL list without downloading.
             concurrency: Maximum number of concurrent downloads.
             download_dir: Directory to save downloaded packages.
+            use_cn_mirrors: If True, use Chinese mirrors with fallback. Otherwise use official PyPI.
+            python_version: Python version filter (e.g., "cp311", "py3").
+            abi: ABI filter (e.g., "cp311", "abi3", "none").
+            platform: Platform filter (e.g., "manylinux_2_17_x86_64", "win_amd64", "any").
         """
         self.requirements_file: Path = requirements_file
         self.session: Optional[aiohttp.ClientSession] = None
@@ -71,11 +93,30 @@ class PackageDownloader:
         self.timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(
             total=None, connect=60, sock_read=60
         )
-        self._current_mirror_idx: int = 0  # Added: Track current mirror index
+        self.use_cn_mirrors = use_cn_mirrors
+        self._current_mirror_idx: int = 0
+        self.python_version = python_version
+        self.abi = abi
+        self.platform = platform
+
         logger.info(
             f"Using timeout configuration: connect={self.timeout.connect}s, "
             f"sock_read={self.timeout.sock_read}s"
         )
+        if use_cn_mirrors:
+            logger.info(f"Using Chinese mirrors with fallback")
+        else:
+            logger.info(f"Using official PyPI (https://pypi.org)")
+
+        if python_version or abi or platform:
+            filters = []
+            if python_version:
+                filters.append(f"python={python_version}")
+            if abi:
+                filters.append(f"abi={abi}")
+            if platform:
+                filters.append(f"platform={platform}")
+            logger.info(f"Filtering wheels: {', '.join(filters)}")
 
     async def get_next_mirror(self) -> str:
         """
@@ -89,24 +130,28 @@ class PackageDownloader:
 
     def current_mirror_base(self, path: str = "") -> str:
         """
-        生成标准化的镜像基础URL，确保路径以斜杠结尾
-        
+        生成标准化的镜像基础URL, 确保路径以斜杠结尾
+
         Args:
             path: 要追加的路径部分
-            
+
         Returns:
-            标准化后的完整URL，保证以斜杠结尾
+            标准化后的完整URL, 保证以斜杠结尾
         """
-        base_url = self.PYPI_MIRRORS[self._current_mirror_idx]
+        if self.use_cn_mirrors:
+            base_url = self.PYPI_MIRRORS[self._current_mirror_idx]
+        else:
+            base_url = "https://pypi.org"
+
         parsed = urlparse(base_url)
-        
+
         base_path = PurePosixPath(parsed.path)
         full_path = Path(base_path / path).resolve(strict=False)
-        
+
         path_str = str(full_path)
         if not path_str.endswith('/'):
             path_str += '/'
-            
+
         return urlunparse((
             parsed.scheme,
             parsed.netloc,
@@ -151,6 +196,123 @@ class PackageDownloader:
 
             return full_package_name, version
         return None
+    @staticmethod
+    def parse_wheel_filename(filename: str) -> Optional[Dict[str, str]]:
+        """
+        Parse a wheel filename according to PEP 425.
+
+        Format: {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl
+
+        Args:
+            filename: The wheel filename to parse.
+
+        Returns:
+            Dict with keys: name, version, build, python, abi, platform, or None if not a wheel.
+        """
+        if not filename.endswith('.whl'):
+            return None
+
+        # Remove .whl extension
+        name_parts = filename[:-4].split('-')
+
+        if len(name_parts) < 5:
+            return None
+
+        # Handle optional build tag
+        if len(name_parts) >= 6:
+            # Has build tag
+            return {
+                'name': name_parts[0],
+                'version': name_parts[1],
+                'build': name_parts[2],
+                'python': name_parts[3],
+                'abi': name_parts[4],
+                'platform': name_parts[5]
+            }
+        else:
+            # No build tag
+            return {
+                'name': name_parts[0],
+                'version': name_parts[1],
+                'build': None,
+                'python': name_parts[2],
+                'abi': name_parts[3],
+                'platform': name_parts[4]
+            }
+
+    def matches_filter(
+        self, 
+        filename: str, 
+        python_version: Optional[str] = None,
+        abi: Optional[str] = None,
+        platform: Optional[str] = None
+    ) -> bool:
+        """
+        Check if a file matches the specified filters.
+
+        Args:
+            filename: The filename to check.
+            python_version: Python version filter (e.g., "cp311", "py3", "py2.py3").
+            abi: ABI filter (e.g., "cp311", "abi3", "none").
+            platform: Platform filter (e.g., "manylinux_2_17_x86_64", "win_amd64", "any").
+
+        Returns:
+            True if file matches all specified filters (or is not a wheel).
+        """
+        # Non-wheel files (source distributions) always pass
+        wheel_info = self.parse_wheel_filename(filename)
+        if not wheel_info:
+            return True
+
+        # Always ignore Python 2 only packages
+        file_python_tags = wheel_info['python'].split('.')
+
+        # Check if it's Python 2 only (py2, py20, py21, etc. but NOT py2.py3)
+        is_py2_only = any(
+            tag.startswith('py2') and tag != 'py2' 
+            for tag in file_python_tags
+        ) and not any(
+            tag.startswith('py3') or tag.startswith('cp3')
+            for tag in file_python_tags
+        )
+
+        # Also check for pure py2 tag without py3
+        if 'py2' in file_python_tags and not any(
+            tag.startswith('py3') or tag.startswith('cp3')
+            for tag in file_python_tags
+        ):
+            is_py2_only = True
+
+        if is_py2_only:
+            logger.debug(f"Skipping Python 2 only package: {filename}")
+            return False
+
+        # Check python version filter
+        if python_version:
+            # Handle compressed tags like "py2.py3"
+            filter_python_tags = python_version.split('.')
+
+            # Match if any filter tag is in file tags
+            if not any(tag in file_python_tags for tag in filter_python_tags):
+                return False
+
+        # Check ABI filter
+        if abi:
+            file_abi_tags = wheel_info['abi'].split('.')
+            filter_abi_tags = abi.split('.')
+
+            if not any(tag in file_abi_tags for tag in filter_abi_tags):
+                return False
+
+        # Check platform filter
+        if platform:
+            file_platform_tags = wheel_info['platform'].split('.')
+            filter_platform_tags = platform.split('.')
+
+            if not any(tag in file_platform_tags for tag in filter_platform_tags):
+                return False
+
+        return True
 
     async def fetch_metadata(
         self, package_with_extras: str
@@ -168,8 +330,11 @@ class PackageDownloader:
         last_exception = None
         package_for_url: str = re.sub(r"\[.*?\]", "", package_with_extras)
 
-        for _ in range(len(self.PYPI_MIRRORS)):
-            url = f"{self.current_mirror_base('web/json/')}/{package_for_url}"
+        # If not using CN mirrors, only try once with official PyPI
+        max_attempts = len(self.PYPI_MIRRORS) if self.use_cn_mirrors else 1
+
+        for _ in range(max_attempts):
+            url = f"{self.current_mirror_base('web/json/')}/{package_for_url}" if self.use_cn_mirrors else f"https://pypi.org/pypi/{package_for_url}/json"
             try:
                 logger.debug(f"Trying metadata URL: {url}")
                 assert self.session is not None
@@ -181,12 +346,16 @@ class PackageDownloader:
                         raise aiohttp.ClientError(f"Invalid JSON: {str(e)}")
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exception = e
-                logger.warning(
-                    f"Mirror {url} failed: {str(e)}. "
-                    f"Trying next mirror..."
-                )
-                await self.get_next_mirror()
-                continue
+                if self.use_cn_mirrors:
+                    logger.warning(
+                        f"Mirror {url} failed: {str(e)}. "
+                        f"Trying next mirror..."
+                    )
+                    await self.get_next_mirror()
+                    continue
+                else:
+                    logger.error(f"Official PyPI failed: {str(e)}")
+                    return None
             # pylint: disable=W0718 # Catching too general exception Exception
             except Exception as e:
                 logger.error(
@@ -224,9 +393,9 @@ class PackageDownloader:
             url: The original download URL.
 
         Returns:
-            The rewritten URL pointing to the current mirror.
+            The rewritten URL pointing to the current mirror (if using CN mirrors), or original URL.
         """
-        if url.startswith("https://files.pythonhosted.org/"):
+        if self.use_cn_mirrors and url.startswith("https://files.pythonhosted.org/"):
             # Replace the official PyPI download host with the mirror's
             # equivalent path
             return url.replace(
@@ -382,6 +551,17 @@ class PackageDownloader:
                 for file_info in version_info:
                     url: str = file_info["url"]
                     filename: str = file_info["filename"]
+                    
+                    # Apply filters
+                    if not self.matches_filter(
+                        filename, 
+                        self.python_version, 
+                        self.abi, 
+                        self.platform
+                    ):
+                        logger.debug(f"Skipping {filename} (doesn't match filters)")
+                        continue
+                    
                     final_url: str = self.rewrite_url(url)
                     self.download_urls.append(final_url)
 
@@ -467,8 +647,15 @@ def main() -> None:
         "requirements",
         type=str,
         nargs="?",
-        default=str(Path.cwd() / "requirements.txt"),
-        help="Path to the requirements.txt file (default: ./requirements.txt)",
+        default=None,
+        help="Path to the requirements.txt file",
+    )
+    parser.add_argument(
+        "-r",
+        "--requirement",
+        type=str,
+        dest="requirement_file",
+        help="Path to the requirements.txt file (alternative to positional argument)",
     )
     parser.add_argument(
         "--dry-run",
@@ -484,25 +671,114 @@ def main() -> None:
     parser.add_argument(
         "--download-dir",
         type=str,
-        default=str(Path.cwd() / "packages"),
-        help="Directory to save downloads (default: ./packages)",
+        default=str(Path.cwd() / "pypi"),
+        help="Directory to save downloads (default: ./pypi)",
+    )
+    parser.add_argument(
+        "--cn",
+        action="store_true",
+        help="Use Chinese PyPI mirrors with automatic fallback (default: use official PyPI)",
+    )
+    parser.add_argument(
+        "--build-index",
+        action="store_true",
+        help="Build PyPI-compatible index using dir2pi after downloading",
+    )
+    parser.add_argument(
+        "--python-version",
+        type=str,
+        help="Filter by Python version tag (e.g., cp311, py3, py2.py3)",
+    )
+    parser.add_argument(
+        "--abi",
+        type=str,
+        help="Filter by ABI tag (e.g., cp311, abi3, none)",
+    )
+    parser.add_argument(
+        "--platform",
+        type=str,
+        help="Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)",
+    )
+    parser.add_argument(
+        "--resolve-deps",
+        action="store_true",
+        help="Use pip-compile to resolve dependencies before downloading (requires pip-tools)",
     )
 
     args = parser.parse_args()
 
-    if not Path(args.requirements).exists():
+    # Determine requirements file path
+    requirements_path = None
+    if args.requirement_file:
+        requirements_path = args.requirement_file
+    elif args.requirements:
+        requirements_path = args.requirements
+    else:
+        # Default to requirements.txt in current directory
+        requirements_path = str(Path.cwd() / "requirements.txt")
+
+    if not Path(requirements_path).exists():
+        logger.error(f"Requirements file not found: {requirements_path}")
         parser.print_help()
         return
-        
+
     download_dir = Path(args.download_dir)
+
+    # Resolve dependencies with pip-compile if requested
+    final_requirements_path = Path(requirements_path)
+    if args.resolve_deps:
+        logger.info("Resolving dependencies with pip-compile...")
+        resolved_file = download_dir / "requirements-resolved.txt"
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Build pip-compile command
+            pip_compile_cmd = [
+                "pip-compile",
+                str(requirements_path),
+                "-o", str(resolved_file),
+                "--no-header",
+                "--quiet",
+            ]
+
+            # Add index URL if using CN mirrors
+            if args.cn:
+                # Use first CN mirror for dependency resolution
+                pip_compile_cmd.extend(["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"])
+
+            result = subprocess.run(
+                pip_compile_cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"Dependencies resolved and saved to {resolved_file}")
+            final_requirements_path = resolved_file
+
+        except FileNotFoundError:
+            logger.error(
+                "pip-compile command not found. Please install pip-tools: pip install pip-tools"
+            )
+            return
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to resolve dependencies: {e.stderr}")
+            return
+        # pylint: disable=W0718 # Catching too general exception Exception
+        except Exception as e:
+            logger.error(f"Unexpected error resolving dependencies: {e}")
+            return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
     # Pass the timeout arguments directly to the PackageDownloader constructor
     downloader = PackageDownloader(
-        requirements_file=Path(args.requirements),
+        requirements_file=final_requirements_path,
         dry_run=args.dry_run,
         concurrency=args.concurrency,
         download_dir=download_dir,
+        use_cn_mirrors=args.cn,
+        python_version=args.python_version,
+        abi=args.abi,
+        platform=args.platform,
     )
 
     package_sync_results: List[Dict[str, Any]] = asyncio.run(downloader.run())
@@ -540,6 +816,29 @@ def main() -> None:
         table.add_row(package, version, f"[{status_style}]{status}[/]", details)
 
     console.print(table)
+
+    # Build PyPI index if requested
+    if args.build_index and not args.dry_run:
+        logger.info("Building PyPI-compatible index with dir2pi...")
+        try:
+            result = subprocess.run(
+                ["dir2pi", str(download_dir)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"Index built successfully at {download_dir}/simple/")
+            if result.stdout:
+                logger.debug(result.stdout)
+        except FileNotFoundError:
+            logger.error(
+                "dir2pi command not found. Please install pip2pi: pip install pip2pi"
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to build index: {e.stderr}")
+        # pylint: disable=W0718 # Catching too general exception Exception
+        except Exception as e:
+            logger.error(f"Unexpected error building index: {e}")
 
 
 if __name__ == "__main__":

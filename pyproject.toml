@@ -1,7 +1,7 @@
 [project]
 name = "pypi-downloader"
-version = "0.1.1"
-description = "Async PyPI package downloader with mirror fallback"
+version = "0.2.0"
+description = "Async PyPI package downloader with mirror fallback, dependency resolution, and platform filtering"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11",
@@ -11,7 +11,24 @@ dependencies = [
 license = {text = "MIT"}
 readme = "README.md"
 authors = [
-    { name = "X4068", email = "54296390@qq.com" }
+    { name = "Hektor", email = "hektorwang@gmail.com" }
+]
+keywords = ["pypi", "mirror", "download", "async", "package-manager"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Archiving :: Mirroring",
+]
+
+[project.optional-dependencies]
+full = [
+    "pip-tools>=7.0.0",  # For --resolve-deps
+    "pip2pi>=0.8.0",     # For --build-index
 ]
 
 [project.scripts]
