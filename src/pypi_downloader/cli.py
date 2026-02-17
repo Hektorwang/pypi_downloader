@@ -43,7 +43,6 @@ class RichLogSink:
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TextColumn("{task.completed}/{task.total} files"),
-            TimeRemainingColumn(),
         )
         self.task_id = None
 
@@ -727,8 +726,8 @@ class PackageDownloader:
         dest_path: Path = self.download_dir / filename
         rewritten_url: str = self.rewrite_url(url)
 
-        # Debug: Log the URL being downloaded
-        logger.debug(f"Downloading: {rewritten_url}")
+        # Log the URL being downloaded (file only, not to screen)
+        logger.opt(depth=1).log("TRACE", f"Downloading: {rewritten_url}")
 
         # Check if file already exists (async)
         loop = asyncio.get_event_loop()
@@ -1084,10 +1083,10 @@ def configure_logging(use_rich: bool = False) -> Optional[RichLogSink]:
             colorize=True,
         )
 
-    # Add file sink (DEBUG+, with rotation) - always enabled
+    # Add file sink (TRACE+, with rotation) - always enabled, captures everything
     logger.add(
         "./pypi-downloader.log",
-        level="DEBUG",
+        level="TRACE",
         rotation="10 MB",
         retention=3,
         encoding="utf-8",

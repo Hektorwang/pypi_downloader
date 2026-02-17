@@ -1,5 +1,37 @@
 # Release Notes
 
+## v0.4.3 (2026-02-18)
+
+### 🔧 Improvements
+
+#### Cleaner Progress Bar
+- **Removed time remaining**: Progress bar no longer shows estimated time remaining
+- **Simpler display**: Now shows only: Description | Bar | Percentage | File count
+- Example: `Downloading ████████░░░░ 60% 150/250 files`
+
+#### Download URLs Only in Log File
+- **Screen**: Download URLs no longer appear in Rich Live display
+- **Log file**: URLs still logged to `pypi-downloader.log` for troubleshooting
+- **Benefit**: Cleaner screen output, less clutter
+- **Technical**: Uses TRACE level (below DEBUG) for download URLs
+  - TRACE messages only go to file (level: TRACE+)
+  - Rich display shows DEBUG+ (but TRACE is below DEBUG, so excluded)
+
+#### Display Hierarchy
+```
+Screen (Rich Live):
+  - INFO: Important events (Downloaded, Synchronized, etc.)
+  - DEBUG: Metadata fetching, file counting
+  - TRACE: ❌ Not shown (download URLs)
+
+File (pypi-downloader.log):
+  - TRACE: Download URLs ✓
+  - DEBUG: All debug info ✓
+  - INFO: All info messages ✓
+```
+
+---
+
 ## v0.4.2 (2026-02-18)
 
 ### 🐛 Bug Fixes
