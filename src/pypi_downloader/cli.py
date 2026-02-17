@@ -3,33 +3,22 @@ pypi_downloader.py - A Python script to download packages from PyPI mirrors
 with automatic fallback mechanism when mirrors fail.
 """
 
-import json
+import argparse
+import asyncio
 import hashlib
+import json
+import re
 import subprocess
-from pathlib import Path,PurePosixPath
-import re
-from typing import List, Optional, Tuple, Dict, Any
-import asyncio
-import argparse
-import aiohttp
-from loguru import logger
-from rich.console import Console
-from rich.table import Table
-from urllib.parse import  urlparse, urlunparse
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse, urlunparse
 
-import json
-import hashlib
-from pathlib import Path,PurePosixPath
-import re
-from typing import List, Optional, Tuple, Dict, Any
-import asyncio
-import argparse
 import aiohttp
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
-from urllib.parse import  urlparse, urlunparse
+
 
 class PackageDownloader:
     """
@@ -97,7 +86,9 @@ class PackageDownloader:
         self.download_urls: List[str] = []
         self.download_dir = download_dir
         self.save_url_list = save_url_list
-        self.url_list_file = url_list_path if url_list_path else Path.cwd() / "url_list.txt"
+        self.url_list_file = (
+            url_list_path if url_list_path else Path.cwd() / "url_list.txt"
+        )
         self.timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(
             total=None, connect=60, sock_read=60
         )
@@ -118,7 +109,9 @@ class PackageDownloader:
             logger.info(f"Using official PyPI (https://pypi.org)")
 
         if all_versions:
-            logger.info("All versions mode enabled: downloading all Python 3 versions of each package")
+            logger.info(
+                "All versions mode enabled: downloading all Python 3 versions of each package"
+            )
 
         if save_url_list:
             logger.info(f"URL list will be saved to: {self.url_list_file}")
@@ -140,7 +133,9 @@ class PackageDownloader:
         Returns:
             The URL of the next mirror to try.
         """
-        self._current_mirror_idx = (self._current_mirror_idx + 1) % len(self.PYPI_MIRRORS)
+        self._current_mirror_idx = (self._current_mirror_idx + 1) % len(
+            self.PYPI_MIRRORS
+        )
         return self.PYPI_MIRRORS[self._current_mirror_idx]
 
     def current_mirror_base(self, path: str = "") -> str:
@@ -164,17 +159,19 @@ class PackageDownloader:
         full_path = Path(base_path / path).resolve(strict=False)
 
         path_str = str(full_path)
-        if not path_str.endswith('/'):
-            path_str += '/'
+        if not path_str.endswith("/"):
+            path_str += "/"
 
-        return urlunparse((
-            parsed.scheme,
-            parsed.netloc,
-            path_str,  # 已确保以斜杠结尾
-            parsed.params,
-            parsed.query,
-            parsed.fragment
-        ))
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                path_str,  # 已确保以斜杠结尾
+                parsed.params,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
 
     @staticmethod
     def parse_package_line(line: str) -> Optional[Tuple[str, str]]:
@@ -221,10 +218,13 @@ class PackageDownloader:
             base_package_name = match_no_version.group(1)
             extras = match_no_version.group(2)
 
-            full_package_name = f"{base_package_name}[{extras}]" if extras else base_package_name
+            full_package_name = (
+                f"{base_package_name}[{extras}]" if extras else base_package_name
+            )
             return full_package_name, ""  # Empty version for all-versions mode
 
         return None
+
     @staticmethod
     def parse_wheel_filename(filename: str) -> Optional[Dict[str, str]]:
         """
@@ -238,11 +238,11 @@ class PackageDownloader:
         Returns:
             Dict with keys: name, version, build, python, abi, platform, or None if not a wheel.
         """
-        if not filename.endswith('.whl'):
+        if not filename.endswith(".whl"):
             return None
 
         # Remove .whl extension
-        name_parts = filename[:-4].split('-')
+        name_parts = filename[:-4].split("-")
 
         if len(name_parts) < 5:
             return None
@@ -251,30 +251,30 @@ class PackageDownloader:
         if len(name_parts) >= 6:
             # Has build tag
             return {
-                'name': name_parts[0],
-                'version': name_parts[1],
-                'build': name_parts[2],
-                'python': name_parts[3],
-                'abi': name_parts[4],
-                'platform': name_parts[5]
+                "name": name_parts[0],
+                "version": name_parts[1],
+                "build": name_parts[2],
+                "python": name_parts[3],
+                "abi": name_parts[4],
+                "platform": name_parts[5],
             }
         else:
             # No build tag
             return {
-                'name': name_parts[0],
-                'version': name_parts[1],
-                'build': None,
-                'python': name_parts[2],
-                'abi': name_parts[3],
-                'platform': name_parts[4]
+                "name": name_parts[0],
+                "version": name_parts[1],
+                "build": None,
+                "python": name_parts[2],
+                "abi": name_parts[3],
+                "platform": name_parts[4],
             }
 
     def matches_filter(
-        self, 
-        filename: str, 
+        self,
+        filename: str,
         python_version: Optional[str] = None,
         abi: Optional[str] = None,
-        platform: Optional[str] = None
+        platform: Optional[str] = None,
     ) -> bool:
         """
         Check if a file matches the specified filters.
@@ -294,21 +294,18 @@ class PackageDownloader:
             return True
 
         # Always ignore Python 2 only packages
-        file_python_tags = wheel_info['python'].split('.')
+        file_python_tags = wheel_info["python"].split(".")
 
         # Check if it's Python 2 only (py2, py20, py21, etc. but NOT py2.py3)
         is_py2_only = any(
-            tag.startswith('py2') and tag != 'py2' 
-            for tag in file_python_tags
+            tag.startswith("py2") and tag != "py2" for tag in file_python_tags
         ) and not any(
-            tag.startswith('py3') or tag.startswith('cp3')
-            for tag in file_python_tags
+            tag.startswith("py3") or tag.startswith("cp3") for tag in file_python_tags
         )
 
         # Also check for pure py2 tag without py3
-        if 'py2' in file_python_tags and not any(
-            tag.startswith('py3') or tag.startswith('cp3')
-            for tag in file_python_tags
+        if "py2" in file_python_tags and not any(
+            tag.startswith("py3") or tag.startswith("cp3") for tag in file_python_tags
         ):
             is_py2_only = True
 
@@ -319,7 +316,7 @@ class PackageDownloader:
         # Check python version filter
         if python_version:
             # Handle compressed tags like "py2.py3"
-            filter_python_tags = python_version.split('.')
+            filter_python_tags = python_version.split(".")
 
             # Match if any filter tag is in file tags
             if not any(tag in file_python_tags for tag in filter_python_tags):
@@ -327,16 +324,16 @@ class PackageDownloader:
 
         # Check ABI filter
         if abi:
-            file_abi_tags = wheel_info['abi'].split('.')
-            filter_abi_tags = abi.split('.')
+            file_abi_tags = wheel_info["abi"].split(".")
+            filter_abi_tags = abi.split(".")
 
             if not any(tag in file_abi_tags for tag in filter_abi_tags):
                 return False
 
         # Check platform filter
         if platform:
-            file_platform_tags = wheel_info['platform'].split('.')
-            filter_platform_tags = platform.split('.')
+            file_platform_tags = wheel_info["platform"].split(".")
+            filter_platform_tags = platform.split(".")
 
             if not any(tag in file_platform_tags for tag in filter_platform_tags):
                 return False
@@ -363,22 +360,25 @@ class PackageDownloader:
         max_attempts = len(self.PYPI_MIRRORS) if self.use_cn_mirrors else 1
 
         for _ in range(max_attempts):
-            url = f"{self.current_mirror_base('web/json/')}/{package_for_url}" if self.use_cn_mirrors else f"https://pypi.org/pypi/{package_for_url}/json"
+            url = (
+                f"{self.current_mirror_base('web/json/')}/{package_for_url}"
+                if self.use_cn_mirrors
+                else f"https://pypi.org/pypi/{package_for_url}/json"
+            )
             try:
                 logger.debug(f"Trying metadata URL: {url}")
                 assert self.session is not None
                 async with self.session.get(url, timeout=self.timeout) as resp:
                     content = await resp.read()
                     try:
-                        return json.loads(content.decode('utf-8'))
+                        return json.loads(content.decode("utf-8"))
                     except json.JSONDecodeError as e:
                         raise aiohttp.ClientError(f"Invalid JSON: {str(e)}")
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exception = e
                 if self.use_cn_mirrors:
                     logger.warning(
-                        f"Mirror {url} failed: {str(e)}. "
-                        f"Trying next mirror..."
+                        f"Mirror {url} failed: {str(e)}. " f"Trying next mirror..."
                     )
                     await self.get_next_mirror()
                     continue
@@ -397,7 +397,6 @@ class PackageDownloader:
             f"All mirrors failed for {package_with_extras}: {str(last_exception)}"
         )
         return None
-
 
     def find_version_info(
         self, metadata: Dict[str, Any], version: str
@@ -440,17 +439,17 @@ class PackageDownloader:
                 filename = file_info.get("filename", "")
 
                 # Source distributions are always compatible
-                if not filename.endswith('.whl'):
+                if not filename.endswith(".whl"):
                     has_py3_files = True
                     break
 
                 # Check wheel for Python 3 compatibility
                 wheel_info = self.parse_wheel_filename(filename)
                 if wheel_info:
-                    python_tags = wheel_info['python'].split('.')
+                    python_tags = wheel_info["python"].split(".")
                     # Has py3, py30+, cp3x, or py2.py3 tags
                     if any(
-                        tag.startswith('py3') or tag.startswith('cp3') 
+                        tag.startswith("py3") or tag.startswith("cp3")
                         for tag in python_tags
                     ):
                         has_py3_files = True
@@ -476,7 +475,7 @@ class PackageDownloader:
             # equivalent path
             return url.replace(
                 "https://files.pythonhosted.org/packages/",
-                self.current_mirror_base('web/packages/'),
+                self.current_mirror_base("web/packages/"),
             )
         return url
 
@@ -512,6 +511,7 @@ class PackageDownloader:
             while chunk := f.read(8192):  # Read 8KB chunks
                 h.update(chunk)
         return h.hexdigest()
+
     @staticmethod
     async def compute_hash_async(file_path: Path, algo: str = "sha256") -> str:
         """
@@ -529,10 +529,12 @@ class PackageDownloader:
             None,  # Use default ThreadPoolExecutor
             PackageDownloader.compute_hash,
             file_path,
-            algo
+            algo,
         )
 
-    async def download_file(self, url: str, filename: str, expected_hash: Optional[str] = None) -> bool:
+    async def download_file(
+        self, url: str, filename: str, expected_hash: Optional[str] = None
+    ) -> bool:
         """
         Download a file with retry logic and hash verification.
 
@@ -546,7 +548,7 @@ class PackageDownloader:
         """
         dest_path: Path = self.download_dir / filename
         rewritten_url: str = self.rewrite_url(url)
-        
+
         # Debug: Log the URL being downloaded
         logger.debug(f"Downloading: {rewritten_url}")
 
@@ -606,7 +608,7 @@ class PackageDownloader:
                     # Ensure directory exists (async)
                     await loop.run_in_executor(
                         None,
-                        lambda: self.download_dir.mkdir(parents=True, exist_ok=True)
+                        lambda: self.download_dir.mkdir(parents=True, exist_ok=True),
                     )
 
                     # Write the downloaded content to file (async)
@@ -681,13 +683,17 @@ class PackageDownloader:
                     # Download all Python 3 compatible versions
                     versions_to_download = self.find_all_python3_versions(metadata)
                     if not versions_to_download:
-                        package_status["details"] = "No Python 3 compatible versions found"
+                        package_status["details"] = (
+                            "No Python 3 compatible versions found"
+                        )
                         return package_status
-                    package_status["version"] = f"all ({len(versions_to_download)} versions)"
+                    package_status["version"] = (
+                        f"all ({len(versions_to_download)} versions)"
+                    )
                 else:
                     # Download only the specified version
-                    version_info: Optional[List[Dict[str, Any]]] = self.find_version_info(
-                        metadata, version
+                    version_info: Optional[List[Dict[str, Any]]] = (
+                        self.find_version_info(metadata, version)
                     )
                     if not version_info:
                         package_status["details"] = "No release info found"
@@ -711,10 +717,7 @@ class PackageDownloader:
 
                         # Apply filters
                         if not self.matches_filter(
-                            filename, 
-                            self.python_version, 
-                            self.abi, 
-                            self.platform
+                            filename, self.python_version, self.abi, self.platform
                         ):
                             logger.debug(f"Skipping {filename} (doesn't match filters)")
                             continue
@@ -730,11 +733,13 @@ class PackageDownloader:
                             download_tasks.append(
                                 self.download_file(final_url, filename, expected_hash)
                             )
-                
+
                 # Execute all downloads concurrently
                 if download_tasks:
                     download_results = await asyncio.gather(*download_tasks)
-                    download_success_count = sum(1 for result in download_results if result)
+                    download_success_count = sum(
+                        1 for result in download_results if result
+                    )
 
                 if total_files > 0 and download_success_count == total_files:
                     package_status["status"] = "Synchronized"
@@ -783,12 +788,15 @@ class PackageDownloader:
         # - No process creation overhead
         # - Shared memory (no pickling overhead)
         import os
+
         max_workers = min(32, (os.cpu_count() or 1) * 4)
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor(max_workers=max_workers)
         loop.set_default_executor(executor)
 
-        logger.info(f"Using {max_workers} threads for I/O operations (file I/O releases GIL)")
+        logger.info(
+            f"Using {max_workers} threads for I/O operations (file I/O releases GIL)"
+        )
 
         async with aiohttp.ClientSession(headers=headers) as self.session:
             valid_lines: List[str] = []
@@ -944,7 +952,8 @@ def main() -> None:
                 pip_compile_cmd = [
                     "pip-compile",
                     str(requirements_path),
-                    "-o", str(resolved_file),
+                    "-o",
+                    str(resolved_file),
                     "--no-header",
                     "--quiet",
                 ]
@@ -952,13 +961,12 @@ def main() -> None:
                 # Add index URL if using CN mirrors
                 if args.cn:
                     # Use first CN mirror for dependency resolution
-                    pip_compile_cmd.extend(["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"])
+                    pip_compile_cmd.extend(
+                        ["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"]
+                    )
 
                 result = subprocess.run(
-                    pip_compile_cmd,
-                    capture_output=True,
-                    text=True,
-                    check=True
+                    pip_compile_cmd, capture_output=True, text=True, check=True
                 )
                 logger.info(f"Dependencies resolved and saved to {resolved_file}")
                 final_requirements_path = resolved_file
@@ -1036,7 +1044,7 @@ def main() -> None:
                 ["dir2pi", str(download_dir)],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             logger.info(f"Index built successfully at {download_dir}/simple/")
             if result.stdout:
