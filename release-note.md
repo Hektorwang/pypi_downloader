@@ -2,7 +2,33 @@
 
 ## v0.2.0 (2026-02-18)
 
+### Project Purpose
+
+This tool is designed for **building internal PyPI mirrors in air-gapped or restricted network environments**. It solves the challenge of downloading Python packages with all their versions, architectures, and dependencies for deployment to internal networks where development machines have:
+- Multiple Python 3 versions (3.8, 3.9, 3.11, etc.)
+- Different processor architectures (x86_64, ARM, etc.)
+- Various operating systems (Linux, Windows, macOS)
+
+The tool enables one-time bulk downloads of all Python 3 compatible versions and wheels, with automatic dependency resolution and pip-compatible index building.
+
+---
+
 ### 🎉 Major Features
+
+#### All Versions Download
+- Added `--all-versions` flag to download all Python 3 compatible versions of each package
+- Automatically filters out Python 2 only versions
+- Perfect for building comprehensive internal PyPI mirrors
+- Ignores version pins in requirements.txt when enabled
+- Example: `pypi-downloader -r requirements.txt --all-versions` downloads numpy 1.19.0 through 1.26.4 (all Python 3 versions)
+- Use case: Internal networks with heterogeneous Python 3 environments (different versions and architectures)
+
+#### URL List Export
+- Added `--save-url-list` flag to save all download URLs to a file
+- Default location: `./url_list.txt` (current directory, not download directory)
+- Custom path supported with `--url-list-path`
+- Useful for auditing, using with other download tools, or keeping records
+- Works with both normal and `--all-versions` modes
 
 #### Chinese Mirror Support
 - Added `--cn` flag to use 14 Chinese PyPI mirrors with automatic fallback
@@ -68,6 +94,27 @@ pypi-downloader -r requirements.txt --cn
 pypi-downloader -r requirements.txt --resolve-deps --cn
 ```
 
+#### Internal PyPI Mirror (Recommended Workflow)
+```bash
+# Complete workflow for internal network deployment
+pypi-downloader -r requirements.txt \
+  --all-versions \
+  --cn \
+  --resolve-deps \
+  --build-index \
+  --save-url-list \
+  --download-dir /var/www/pypi
+
+# This will:
+# 1. Resolve all dependencies with pip-compile
+# 2. Download ALL Python 3 versions of each package
+# 3. Build pip-compatible index at /var/www/pypi/simple/
+# 4. Save URL list to ./url_list.txt for auditing
+
+# Deploy to internal network and use:
+pip install --index-url=file:///var/www/pypi/simple/ numpy
+```
+
 #### Platform-Specific Downloads
 ```bash
 # Download only CPython 3.11 wheels for Linux x86_64
@@ -105,7 +152,11 @@ pip install --index-url=file:///var/www/pypi/simple/ numpy
 ### 🔄 Breaking Changes
 
 - Default download directory changed from `./packages` to `./pypi`
-- Python 2 only packages are now automatically filtered out
+- Python 2 only packages are now automatically filtered out (tool is Python 3 only)
+
+### 🎯 Design Philosophy
+
+This release focuses on the core use case: **building comprehensive internal PyPI mirrors for air-gapped environments**. The `--all-versions` feature is the centerpiece, enabling teams to download once and serve all developers regardless of their Python version or architecture. Combined with `--resolve-deps` and `--build-index`, it provides a complete solution for internal PyPI deployment.
 
 ---
 

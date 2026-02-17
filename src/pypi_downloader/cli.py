@@ -69,6 +69,9 @@ class PackageDownloader:
         python_version: Optional[str] = None,
         abi: Optional[str] = None,
         platform: Optional[str] = None,
+        all_versions: bool = False,
+        save_url_list: bool = False,
+        url_list_path: Optional[Path] = None,
     ) -> None:
         """
         Initialize the PackageDownloader.
@@ -82,6 +85,9 @@ class PackageDownloader:
             python_version: Python version filter (e.g., "cp311", "py3").
             abi: ABI filter (e.g., "cp311", "abi3", "none").
             platform: Platform filter (e.g., "manylinux_2_17_x86_64", "win_amd64", "any").
+            all_versions: If True, download all available versions of each package (Python 3 only).
+            save_url_list: If True, save list of downloaded URLs to a file.
+            url_list_path: Path to save URL list. Defaults to ./url_list.txt in current directory.
         """
         self.requirements_file: Path = requirements_file
         self.session: Optional[aiohttp.ClientSession] = None
@@ -89,7 +95,8 @@ class PackageDownloader:
         self.semaphore: asyncio.Semaphore = asyncio.Semaphore(concurrency)
         self.download_urls: List[str] = []
         self.download_dir = download_dir
-        self.url_list_file = self.download_dir / "url_list.txt"
+        self.save_url_list = save_url_list
+        self.url_list_file = url_list_path if url_list_path else Path.cwd() / "url_list.txt"
         self.timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(
             total=None, connect=60, sock_read=60
         )
@@ -98,6 +105,7 @@ class PackageDownloader:
         self.python_version = python_version
         self.abi = abi
         self.platform = platform
+        self.all_versions = all_versions
 
         logger.info(
             f"Using timeout configuration: connect={self.timeout.connect}s, "
@@ -107,6 +115,12 @@ class PackageDownloader:
             logger.info(f"Using Chinese mirrors with fallback")
         else:
             logger.info(f"Using official PyPI (https://pypi.org)")
+
+        if all_versions:
+            logger.info("All versions mode enabled: downloading all Python 3 versions of each package")
+
+        if save_url_list:
+            logger.info(f"URL list will be saved to: {self.url_list_file}")
 
         if python_version or abi or platform:
             filters = []
@@ -169,15 +183,19 @@ class PackageDownloader:
         Supports formats like "package==version" or "package[extras]==version".
         Lines starting with '#' or empty lines are ignored.
 
+        For --all-versions mode, version can be ignored but still parsed for compatibility.
+
         Args:
             line: The line string to parse.
 
         Returns:
             A tuple containing (package_name, version) if parsing succeeds, None otherwise.
+            Version may be empty string if not specified (for --all-versions mode).
         """
         line = line.strip()
         if not line or line.startswith("#"):
             return None
+
         # Regex to capture package name, optional extras, and version.
         # Group 1: base package name (e.g., "zabbix-utils")
         # Group 2: extras (e.g., "async") - optional
@@ -195,6 +213,16 @@ class PackageDownloader:
                 full_package_name = base_package_name
 
             return full_package_name, version
+
+        # For --all-versions mode, also support package name without version
+        match_no_version = re.match(r"^([\w\-\.]+)(?:\[([\w,\-]+)\])?$", line)
+        if match_no_version:
+            base_package_name = match_no_version.group(1)
+            extras = match_no_version.group(2)
+
+            full_package_name = f"{base_package_name}[{extras}]" if extras else base_package_name
+            return full_package_name, ""  # Empty version for all-versions mode
+
         return None
     @staticmethod
     def parse_wheel_filename(filename: str) -> Optional[Dict[str, str]]:
@@ -385,6 +413,53 @@ class PackageDownloader:
         """
         return metadata.get("releases", {}).get(version)
 
+    def find_all_python3_versions(
+        self, metadata: Dict[str, Any]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Find all Python 3 compatible versions from package metadata.
+
+        Args:
+            metadata: The full package metadata.
+
+        Returns:
+            Dict mapping version strings to their release file lists.
+            Only includes versions that have Python 3 compatible files.
+        """
+        all_releases = metadata.get("releases", {})
+        python3_releases = {}
+
+        for version, files in all_releases.items():
+            if not files:
+                continue
+
+            # Check if this version has any Python 3 compatible files
+            has_py3_files = False
+            for file_info in files:
+                filename = file_info.get("filename", "")
+
+                # Source distributions are always compatible
+                if not filename.endswith('.whl'):
+                    has_py3_files = True
+                    break
+
+                # Check wheel for Python 3 compatibility
+                wheel_info = self.parse_wheel_filename(filename)
+                if wheel_info:
+                    python_tags = wheel_info['python'].split('.')
+                    # Has py3, py30+, cp3x, or py2.py3 tags
+                    if any(
+                        tag.startswith('py3') or tag.startswith('cp3') 
+                        for tag in python_tags
+                    ):
+                        has_py3_files = True
+                        break
+
+            if has_py3_files:
+                python3_releases[version] = files
+
+        return python3_releases
+
     def rewrite_url(self, url: str) -> str:
         """
         Rewrite a PyPI download URL to use the current mirror.
@@ -538,39 +613,54 @@ class PackageDownloader:
                     package_status["details"] = "Failed to fetch metadata"
                     return package_status
 
-                version_info: Optional[List[Dict[str, Any]]] = self.find_version_info(
-                    metadata, version
-                )
-                if not version_info:
-                    package_status["details"] = "No release info found"
-                    return package_status
+                # Determine which versions to download
+                versions_to_download: Dict[str, List[Dict[str, Any]]] = {}
+
+                if self.all_versions:
+                    # Download all Python 3 compatible versions
+                    versions_to_download = self.find_all_python3_versions(metadata)
+                    if not versions_to_download:
+                        package_status["details"] = "No Python 3 compatible versions found"
+                        return package_status
+                    package_status["version"] = f"all ({len(versions_to_download)} versions)"
+                else:
+                    # Download only the specified version
+                    version_info: Optional[List[Dict[str, Any]]] = self.find_version_info(
+                        metadata, version
+                    )
+                    if not version_info:
+                        package_status["details"] = "No release info found"
+                        return package_status
+                    versions_to_download[version] = version_info
 
                 download_success_count = 0
-                total_files = len(version_info)
+                total_files = sum(len(files) for files in versions_to_download.values())
 
-                for file_info in version_info:
-                    url: str = file_info["url"]
-                    filename: str = file_info["filename"]
-                    
-                    # Apply filters
-                    if not self.matches_filter(
-                        filename, 
-                        self.python_version, 
-                        self.abi, 
-                        self.platform
-                    ):
-                        logger.debug(f"Skipping {filename} (doesn't match filters)")
-                        continue
-                    
-                    final_url: str = self.rewrite_url(url)
-                    self.download_urls.append(final_url)
+                # Process all versions
+                for ver, version_files in versions_to_download.items():
+                    for file_info in version_files:
+                        url: str = file_info["url"]
+                        filename: str = file_info["filename"]
 
-                    if self.dry_run:
-                        logger.info(f"[Dry-run] Would download: {final_url}")
-                        download_success_count += 1  # Count as success in dry-run
-                    else:
-                        if await self.download_file(final_url, filename):
-                            download_success_count += 1
+                        # Apply filters
+                        if not self.matches_filter(
+                            filename, 
+                            self.python_version, 
+                            self.abi, 
+                            self.platform
+                        ):
+                            logger.debug(f"Skipping {filename} (doesn't match filters)")
+                            continue
+
+                        final_url: str = self.rewrite_url(url)
+                        self.download_urls.append(final_url)
+
+                        if self.dry_run:
+                            logger.info(f"[Dry-run] Would download: {final_url}")
+                            download_success_count += 1  # Count as success in dry-run
+                        else:
+                            if await self.download_file(final_url, filename):
+                                download_success_count += 1
 
                 if total_files > 0 and download_success_count == total_files:
                     package_status["status"] = "Synchronized"
@@ -626,12 +716,12 @@ class PackageDownloader:
                 *(self.process_package(line) for line in valid_lines)
             )
 
-            if self.download_urls:
+            if self.save_url_list and self.download_urls:
                 self.url_list_file.write_text(
                     "\n".join(self.download_urls), encoding="utf-8"
                 )
                 logger.info(f"✔ URL list saved to {self.url_list_file}")
-            else:
+            elif self.save_url_list:
                 logger.info(
                     "No download URLs were collected. URL list file "
                     "will not be created."
@@ -704,6 +794,21 @@ def main() -> None:
         action="store_true",
         help="Use pip-compile to resolve dependencies before downloading (requires pip-tools)",
     )
+    parser.add_argument(
+        "--all-versions",
+        action="store_true",
+        help="Download all available Python 3 versions of each package (ignores version pins in requirements.txt)",
+    )
+    parser.add_argument(
+        "--save-url-list",
+        action="store_true",
+        help="Save list of downloaded URLs to a file (default: ./url_list.txt)",
+    )
+    parser.add_argument(
+        "--url-list-path",
+        type=str,
+        help="Custom path for URL list file (default: ./url_list.txt)",
+    )
 
     args = parser.parse_args()
 
@@ -724,49 +829,58 @@ def main() -> None:
 
     download_dir = Path(args.download_dir)
 
+    # Determine URL list path
+    url_list_path = Path(args.url_list_path) if args.url_list_path else None
+
     # Resolve dependencies with pip-compile if requested
     final_requirements_path = Path(requirements_path)
     if args.resolve_deps:
-        logger.info("Resolving dependencies with pip-compile...")
-        resolved_file = download_dir / "requirements-resolved.txt"
-        download_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            # Build pip-compile command
-            pip_compile_cmd = [
-                "pip-compile",
-                str(requirements_path),
-                "-o", str(resolved_file),
-                "--no-header",
-                "--quiet",
-            ]
-
-            # Add index URL if using CN mirrors
-            if args.cn:
-                # Use first CN mirror for dependency resolution
-                pip_compile_cmd.extend(["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"])
-
-            result = subprocess.run(
-                pip_compile_cmd,
-                capture_output=True,
-                text=True,
-                check=True
+        if args.all_versions:
+            logger.warning(
+                "--resolve-deps is ignored when --all-versions is enabled "
+                "(all versions will be downloaded regardless of dependencies)"
             )
-            logger.info(f"Dependencies resolved and saved to {resolved_file}")
-            final_requirements_path = resolved_file
+        else:
+            logger.info("Resolving dependencies with pip-compile...")
+            resolved_file = download_dir / "requirements-resolved.txt"
+            download_dir.mkdir(parents=True, exist_ok=True)
 
-        except FileNotFoundError:
-            logger.error(
-                "pip-compile command not found. Please install pip-tools: pip install pip-tools"
-            )
-            return
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to resolve dependencies: {e.stderr}")
-            return
-        # pylint: disable=W0718 # Catching too general exception Exception
-        except Exception as e:
-            logger.error(f"Unexpected error resolving dependencies: {e}")
-            return
+            try:
+                # Build pip-compile command
+                pip_compile_cmd = [
+                    "pip-compile",
+                    str(requirements_path),
+                    "-o", str(resolved_file),
+                    "--no-header",
+                    "--quiet",
+                ]
+
+                # Add index URL if using CN mirrors
+                if args.cn:
+                    # Use first CN mirror for dependency resolution
+                    pip_compile_cmd.extend(["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"])
+
+                result = subprocess.run(
+                    pip_compile_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                logger.info(f"Dependencies resolved and saved to {resolved_file}")
+                final_requirements_path = resolved_file
+
+            except FileNotFoundError:
+                logger.error(
+                    "pip-compile command not found. Please install pip-tools: pip install pip-tools"
+                )
+                return
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to resolve dependencies: {e.stderr}")
+                return
+            # pylint: disable=W0718 # Catching too general exception Exception
+            except Exception as e:
+                logger.error(f"Unexpected error resolving dependencies: {e}")
+                return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
     # Pass the timeout arguments directly to the PackageDownloader constructor
@@ -779,6 +893,9 @@ def main() -> None:
         python_version=args.python_version,
         abi=args.abi,
         platform=args.platform,
+        all_versions=args.all_versions,
+        save_url_list=args.save_url_list,
+        url_list_path=url_list_path,
     )
 
     package_sync_results: List[Dict[str, Any]] = asyncio.run(downloader.run())

@@ -2,10 +2,35 @@
 
 A fast, asynchronous Python CLI tool to **bulk-download packages from PyPI mirrors** with automatic fallback, concurrency control, hash verification, and rich terminal output.
 
+## 🎯 Purpose
+
+This tool is designed for **building internal PyPI mirrors in air-gapped or restricted network environments**. 
+
+### Use Case
+
+Your development environment is in an internal network without direct internet access. Your team uses:
+- Multiple Python 3 versions (3.8, 3.9, 3.11, etc.)
+- Different processor architectures (x86_64, ARM, etc.)
+- Various operating systems (Linux, Windows, macOS)
+
+**The Challenge**: When you need a PyPI package, you want to download it once with all its versions, architectures, and dependencies, then deploy to your internal PyPI server so all developers can install what they need.
+
+**The Solution**: This tool downloads all Python 3 compatible versions and wheels of specified packages, resolves dependencies automatically, and builds a pip-compatible index - ready to deploy to your internal network.
+
+### Key Benefits
+
+- ✅ **One-time download**: Get all versions and platforms in a single run
+- ✅ **Heterogeneous support**: Works for teams with mixed Python versions and architectures
+- ✅ **Dependency resolution**: Automatically includes all transitive dependencies
+- ✅ **Production-ready**: SHA-256 verification, retry logic, and mirror fallback
+- ✅ **Fast**: Async concurrent downloads (256 streams by default)
+- ✅ **China-friendly**: Built-in support for 14 Chinese mirrors
+
 ---
 
 ## ✨ Highlights
 
+- **All versions download** – download all Python 3 versions of each package with `--all-versions`
 - **Multi-mirror fallback** – retries the next mirror automatically if one fails (14 Chinese mirrors + official PyPI)
 - **Async & concurrent** – hundreds of files in parallel without blocking (default: 256 streams)
 - **Hash verification** – SHA-256 integrity check on every file
@@ -14,7 +39,7 @@ A fast, asynchronous Python CLI tool to **bulk-download packages from PyPI mirro
 - **Dry-run mode** – preview URLs or disk usage before you download
 - **Rich terminal UI** – colorful tables and progress logs via [Rich][rich]
 - **PyPI index builder** – automatically build pip-compatible index with dir2pi
-- **Zero-config** – point it at a `requirements.txt` and run
+- **Python 3 only** – automatically ignores Python 2 packages
 
 ---
 
@@ -75,6 +100,9 @@ options:
   --abi ABI             Filter by ABI tag (e.g., cp311, abi3, none)
   --platform PLATFORM   Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)
   --resolve-deps        Use pip-compile to resolve dependencies before downloading
+  --all-versions        Download all available Python 3 versions of each package
+  --save-url-list       Save list of downloaded URLs to a file (default: ./url_list.txt)
+  --url-list-path PATH  Custom path for URL list file
 ```
 
 2025-07-29 12:34:56 | INFO | Packages will be downloaded to: /home/user/pypi
@@ -89,6 +117,21 @@ Package Synchronization Summary (bold magenta) |
 | torch | 2.3.0 | Failed | All mirrors failed: 404 Not Found |
 
 ## 📋 Advanced Examples
+
+### Download All Versions (Internal PyPI Mirror)
+
+Perfect for building an internal PyPI mirror with all Python 3 versions:
+
+```bash
+# Download all versions of packages listed in requirements.txt
+pypi-downloader -r requirements.txt --all-versions --cn --build-index
+
+# This will download ALL Python 3 compatible versions, for example:
+# numpy: 1.19.0, 1.19.1, ..., 1.26.4 (all versions)
+# pandas: 1.0.0, 1.0.1, ..., 2.2.2 (all versions)
+```
+
+Use case: Your internal network has machines with different Python 3 versions (3.8, 3.9, 3.11) and architectures (x86_64, ARM). This command downloads all wheels so any machine can install what it needs.
 
 ### Resolve Dependencies and Download
 
@@ -154,6 +197,23 @@ pypi-downloader -r requirements.txt --cn
 Supported mirrors:
 - Aliyun, Tencent Cloud, Tsinghua, USTC, BFSU, SJTU, NJU, and more
 - Automatic fallback if one mirror fails
+
+### Save URL List
+
+Save all download URLs to a file for later use or auditing:
+
+```bash
+# Save to default location (./url_list.txt)
+pypi-downloader -r requirements.txt --save-url-list
+
+# Save to custom location
+pypi-downloader -r requirements.txt --save-url-list --url-list-path /path/to/urls.txt
+```
+
+Use cases:
+- Audit what will be downloaded before actual download
+- Use with other download tools (wget, aria2c)
+- Keep a record of downloaded packages
 
 ## 🔧 Requirements
 
