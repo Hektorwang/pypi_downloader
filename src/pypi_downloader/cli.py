@@ -29,7 +29,7 @@ from rich.panel import Panel
 class RichLogSink:
     """使用 Rich Live 显示最后 N 行日志和进度条"""
 
-    def __init__(self, max_lines=19):
+    def __init__(self, max_lines=25):
         """
         Args:
             max_lines: 最多显示的日志行数（不包括进度条）
@@ -1052,23 +1052,34 @@ class PackageDownloader:
         return all_package_results  # Return the collected results
 
 
-def configure_logging() -> RichLogSink:
-    """Configure loguru with Rich Live display and file logging."""
+def configure_logging(use_rich: bool = False) -> Optional[RichLogSink]:
+    """Configure loguru with optional Rich Live display and file logging."""
     # Remove default handler
     logger.remove()
 
-    # Create Rich sink for terminal display (last 19 lines + 1 progress line = 20 total)
-    rich_sink = RichLogSink(max_lines=19)
-    rich_sink.start()
+    rich_sink = None
+    
+    if use_rich:
+        # Create Rich sink for terminal display (20 lines + 1 progress line = 21 total)
+        rich_sink = RichLogSink(max_lines=20)
+        rich_sink.start()
 
-    # Add Rich sink (INFO+)
-    logger.add(
-        rich_sink,
-        level="INFO",
-        format="{time:HH:mm:ss} | {level: <8} | {message}",
-    )
+        # Add Rich sink (DEBUG+)
+        logger.add(
+            rich_sink,
+            level="DEBUG",
+            format="{time:HH:mm:ss} | {level: <8} | {message}",
+        )
+    else:
+        # Add simple console sink for initial setup (INFO+)
+        logger.add(
+            sys.stderr,
+            level="INFO",
+            format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+            colorize=True,
+        )
 
-    # Add file sink (DEBUG+, with rotation)
+    # Add file sink (DEBUG+, with rotation) - always enabled
     logger.add(
         "./pypi-downloader.log",
         level="DEBUG",
@@ -1083,8 +1094,8 @@ def configure_logging() -> RichLogSink:
 
 def main() -> None:
     """Main entry point for command-line execution."""
-    # Configure logging before anything else
-    rich_sink = configure_logging()
+    # Start with simple console logging for initial setup
+    configure_logging(use_rich=False)
     
     parser = argparse.ArgumentParser(description="PyPI Package Downloader")
     parser.add_argument(
@@ -1271,7 +1282,7 @@ def main() -> None:
         logger.info("All versions mode enabled: downloading all Python 3 versions of each package")
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
-    logger.debug(f"Using requirements file: {final_requirements_path.absolute()}")
+    logger.info(f"Using requirements file: {final_requirements_path.absolute()}")
     
     # Pass the timeout arguments directly to the PackageDownloader constructor
     downloader = PackageDownloader(
@@ -1287,6 +1298,14 @@ def main() -> None:
         save_url_list=args.save_url_list,
         url_list_path=url_list_path,
     )
+    
+    # Now switch to Rich Live display for download progress
+    logger.info("=" * 60)
+    logger.info("Switching to live progress display...")
+    logger.info("=" * 60)
+    
+    # Reconfigure logging with Rich
+    rich_sink = configure_logging(use_rich=True)
     
     # Set rich_sink for progress tracking
     downloader.rich_sink = rich_sink

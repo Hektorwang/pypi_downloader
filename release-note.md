@@ -1,5 +1,33 @@
 # Release Notes
 
+## v0.4.1 (2026-02-18)
+
+### 🔧 Improvements
+
+#### Enhanced Debug Visibility
+- **Rich Live display now shows DEBUG+ messages** (was INFO+ before)
+- **Increased display lines to 20** (was 19 before)
+- Total display: 20 lines of logs + 1 line progress bar = 21 lines
+
+#### Two-Phase Logging
+- **Phase 1 (Setup)**: Normal console logging for initialization
+  - Configuration messages
+  - Dependency resolution (pip-compile)
+  - Setup information
+  - These messages stay permanently visible above the Rich display
+- **Phase 2 (Download)**: Rich Live display for download progress
+  - Metadata fetching (DEBUG)
+  - Download progress (INFO)
+  - File operations (DEBUG)
+  - Limited to most recent 20 lines
+
+#### Benefits
+- See detailed DEBUG logs during downloads
+- Initial setup messages don't consume Rich display lines
+- Better troubleshooting with full debug visibility
+
+---
+
 ## v0.4.0 (2026-02-18)
 
 ### 🎉 Major UI Overhaul
