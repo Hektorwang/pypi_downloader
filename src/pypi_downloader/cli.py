@@ -512,6 +512,25 @@ class PackageDownloader:
             while chunk := f.read(8192):  # Read 8KB chunks
                 h.update(chunk)
         return h.hexdigest()
+    @staticmethod
+    async def compute_hash_async(file_path: Path, algo: str = "sha256") -> str:
+        """
+        Compute cryptographic hash of a file asynchronously using thread pool.
+
+        Args:
+            file_path: Path to the file.
+            algo: Hash algorithm to use.
+
+        Returns:
+            The hexadecimal hash digest.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,  # Use default ThreadPoolExecutor
+            PackageDownloader.compute_hash,
+            file_path,
+            algo
+        )
 
     async def download_file(self, url: str, filename: str, expected_hash: Optional[str] = None) -> bool:
         """

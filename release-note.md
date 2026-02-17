@@ -1,5 +1,18 @@
 # Release Notes
 
+## v0.2.2 (2026-02-18)
+
+### 🐛 Critical Bug Fix
+
+- **Fixed**: `AttributeError: 'PackageDownloader' object has no attribute 'compute_hash_async'`
+- The `compute_hash_async()` method was being called but was not defined in the class
+- This caused all downloads to fail when verifying existing files with hash
+- Added the missing `compute_hash_async()` static method that wraps `compute_hash()` in a thread pool executor
+
+**Impact**: v0.2.1 was completely broken and could not download any files. This release fixes the critical issue.
+
+---
+
 ## v0.2.1 (2026-02-18)
 
 ### 🐛 Bug Fixes & Performance Improvements
