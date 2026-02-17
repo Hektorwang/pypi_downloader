@@ -18,6 +18,7 @@ import aiohttp
 from loguru import logger
 from rich.console import Console
 from rich.table import Table
+from tqdm import tqdm
 
 
 class PackageDownloader:
@@ -98,6 +99,10 @@ class PackageDownloader:
         self.abi = abi
         self.platform = platform
         self.all_versions = all_versions
+        
+        # Progress bar fields
+        self.progress_bar: Optional[tqdm] = None
+        self.total_files: int = 0
 
         logger.info(
             f"Using timeout configuration: connect={self.timeout.connect}s, "
@@ -460,6 +465,43 @@ class PackageDownloader:
 
         return python3_releases
 
+    def _count_downloadable_files(
+        self, metadata: Dict[str, Any], version: str
+    ) -> int:
+        """
+        Count the number of files that would be downloaded for a package.
+
+        Args:
+            metadata: The full package metadata.
+            version: The version to count files for (ignored if all_versions=True).
+
+        Returns:
+            Integer count of files that match filters and would be downloaded.
+        """
+        count = 0
+
+        # Determine which versions to count
+        if self.all_versions:
+            versions_to_count = self.find_all_python3_versions(metadata)
+        else:
+            version_info = self.find_version_info(metadata, version)
+            if not version_info:
+                return 0
+            versions_to_count = {version: version_info}
+
+        # Count files that match filters
+        for ver, version_files in versions_to_count.items():
+            for file_info in version_files:
+                filename = file_info.get("filename", "")
+
+                # Apply filters
+                if self.matches_filter(
+                    filename, self.python_version, self.abi, self.platform
+                ):
+                    count += 1
+
+        return count
+
     def rewrite_url(self, url: str) -> str:
         """
         Rewrite a PyPI download URL to use the current mirror.
@@ -532,6 +574,40 @@ class PackageDownloader:
             algo,
         )
 
+    def _init_progress_bar(self, total: int) -> None:
+        """Initialize tqdm progress bar with total file count."""
+        try:
+            self.progress_bar = tqdm(
+                total=total,
+                desc="Downloading",
+                unit="file",
+                bar_format="{desc}: {n}/{total} files [{percentage:3.0f}%] | {elapsed}<{remaining}",
+                position=0,
+                leave=True,
+            )
+            logger.info(f"Initialized progress bar with {total} total files")
+        except Exception as e:
+            logger.warning(
+                f"Failed to initialize progress bar: {e}. Continuing with log-only mode."
+            )
+            self.progress_bar = None
+
+    def _update_progress(self, n: int = 1) -> None:
+        """Update progress bar by n files (thread-safe, tqdm handles locking)."""
+        if self.progress_bar:
+            try:
+                self.progress_bar.update(n)
+            except Exception as e:
+                logger.debug(f"Progress bar update failed: {e}")
+
+    def _close_progress_bar(self) -> None:
+        """Close progress bar."""
+        if self.progress_bar:
+            try:
+                self.progress_bar.close()
+            except Exception as e:
+                logger.debug(f"Progress bar close failed: {e}")
+
     async def download_file(
         self, url: str, filename: str, expected_hash: Optional[str] = None
     ) -> bool:
@@ -569,6 +645,7 @@ class PackageDownloader:
 
                 if existing_hash == expected_hash_value:
                     logger.debug(f"File exists with valid hash, skipping: {filename}")
+                    self._update_progress(1)  # Update progress for skipped file
                     return True
                 else:
                     logger.warning(
@@ -578,6 +655,7 @@ class PackageDownloader:
             else:
                 # No hash provided, trust existing file
                 logger.debug(f"File already exists, skipping download: {filename}")
+                self._update_progress(1)  # Update progress for skipped file
                 return True
 
         for attempt in range(1, self.DEFAULT_RETRIES + 1):
@@ -615,6 +693,7 @@ class PackageDownloader:
                     await loop.run_in_executor(None, dest_path.write_bytes, content)
 
                     logger.info(f"Downloaded: {filename}")
+                    self._update_progress(1)  # Update progress for successful download
                     return True
             except aiohttp.ClientError as e:
                 logger.warning(
@@ -636,6 +715,7 @@ class PackageDownloader:
         logger.error(
             f"Failed to download after {self.DEFAULT_RETRIES} retries: {filename}"
         )
+        self._update_progress(1)  # Update progress even for failed downloads
         return False
 
     async def process_package(self, line: str) -> Dict[str, Any]:
@@ -799,6 +879,7 @@ class PackageDownloader:
         )
 
         async with aiohttp.ClientSession(headers=headers) as self.session:
+            # Parse valid lines from requirements file
             valid_lines: List[str] = []
             with self.requirements_file.open("r", encoding="utf-8") as f:
                 for line in f:
@@ -811,9 +892,42 @@ class PackageDownloader:
                         else:
                             logger.warning(f"Skipping unparseable line: {line.strip()}")
 
+            # Phase 1: Fetch metadata and count total files
+            logger.info("Phase 1: Fetching package metadata and counting files...")
+            package_metadata_list = []
+            total_files = 0
+
+            for line in valid_lines:
+                parsed = self.parse_package_line(line)
+                if not parsed:
+                    continue
+
+                name, version = parsed
+                logger.debug(f"Fetching metadata for {name}...")
+                metadata = await self.fetch_metadata(name)
+
+                if metadata:
+                    file_count = self._count_downloadable_files(metadata, version)
+                    total_files += file_count
+                    package_metadata_list.append((line, metadata, file_count))
+                    logger.debug(f"{name}: {file_count} files to download")
+                else:
+                    logger.warning(f"Failed to fetch metadata for {name}")
+                    package_metadata_list.append((line, None, 0))
+
+            logger.info(f"Total files to download: {total_files}")
+
+            # Initialize progress bar with total file count
+            self._init_progress_bar(total_files)
+
+            # Phase 2: Download files
+            logger.info("Phase 2: Downloading files...")
             all_package_results: List[Dict[str, Any]] = await asyncio.gather(
                 *(self.process_package(line) for line in valid_lines)
             )
+
+            # Close progress bar
+            self._close_progress_bar()
 
             if self.save_url_list and self.download_urls:
                 self.url_list_file.write_text(
@@ -832,8 +946,35 @@ class PackageDownloader:
         return all_package_results  # Return the collected results
 
 
+def configure_logging() -> None:
+    """Configure loguru with tqdm-compatible terminal output and file logging."""
+    # Remove default handler
+    logger.remove()
+
+    # Add terminal sink (INFO+, using tqdm.write for compatibility)
+    logger.add(
+        lambda msg: tqdm.write(msg, end=""),
+        level="INFO",
+        colorize=True,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+    )
+
+    # Add file sink (DEBUG+, with rotation)
+    logger.add(
+        "./pypi-downloader.log",
+        level="DEBUG",
+        rotation="16 MB",
+        retention=3,
+        encoding="utf-8",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    )
+
+
 def main() -> None:
     """Main entry point for command-line execution."""
+    # Configure logging before anything else
+    configure_logging()
+    
     parser = argparse.ArgumentParser(description="PyPI Package Downloader")
     parser.add_argument(
         "requirements",

@@ -1,12 +1,13 @@
 [project]
 name = "pypi-downloader"
-version = "0.2.3"
+version = "0.3.0"
 description = "Async PyPI package downloader with mirror fallback, dependency resolution, and platform filtering"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11",
     "loguru>=0.6",
     "rich>=12.0",
+    "tqdm>=4.65.0",
 ]
 license = {text = "MIT"}
 readme = "README.md"
