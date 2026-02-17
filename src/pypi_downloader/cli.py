@@ -546,6 +546,9 @@ class PackageDownloader:
         """
         dest_path: Path = self.download_dir / filename
         rewritten_url: str = self.rewrite_url(url)
+        
+        # Debug: Log the URL being downloaded
+        logger.debug(f"Downloading: {rewritten_url}")
 
         # Check if file already exists (async)
         loop = asyncio.get_event_loop()
@@ -694,7 +697,8 @@ class PackageDownloader:
                 download_success_count = 0
                 total_files = sum(len(files) for files in versions_to_download.values())
 
-                # Process all versions
+                # Collect all download tasks for concurrent execution
+                download_tasks = []
                 for ver, version_files in versions_to_download.items():
                     for file_info in version_files:
                         url: str = file_info["url"]
@@ -722,8 +726,15 @@ class PackageDownloader:
                             logger.info(f"[Dry-run] Would download: {final_url}")
                             download_success_count += 1  # Count as success in dry-run
                         else:
-                            if await self.download_file(final_url, filename, expected_hash):
-                                download_success_count += 1
+                            # Add download task for concurrent execution
+                            download_tasks.append(
+                                self.download_file(final_url, filename, expected_hash)
+                            )
+                
+                # Execute all downloads concurrently
+                if download_tasks:
+                    download_results = await asyncio.gather(*download_tasks)
+                    download_success_count = sum(1 for result in download_results if result)
 
                 if total_files > 0 and download_success_count == total_files:
                     package_status["status"] = "Synchronized"

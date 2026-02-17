@@ -1,5 +1,34 @@
 # Release Notes
 
+## v0.2.3 (2026-02-18)
+
+### 🚀 Performance Improvements
+
+#### Fixed Parallel Download Issue
+- **Critical fix**: Files within each package now download concurrently instead of sequentially
+- **Before**: Files in a package were downloaded one-by-one in a `for` loop
+- **After**: All files in a package are collected and downloaded concurrently using `asyncio.gather()`
+- **Impact**: Dramatically faster downloads when packages have multiple files (wheels for different platforms)
+
+#### Enhanced Debug Logging
+- Added debug log showing the URL being downloaded: `logger.debug(f"Downloading: {rewritten_url}")`
+- Helps monitor download progress and troubleshoot issues
+- Enable with loguru's DEBUG level to see all download URLs in real-time
+
+### 📊 Performance Impact
+
+**Download Parallelism:**
+- **Package-level**: Multiple packages download in parallel (existing behavior)
+- **File-level**: Multiple files within each package now also download in parallel (NEW)
+- **Total concurrency**: Still controlled by semaphore (default: 256 concurrent downloads)
+
+**Example improvement:**
+- Package with 10 wheel files (different platforms)
+- Before: 10 sequential downloads = 10x time
+- After: 10 concurrent downloads = ~1x time (limited by semaphore)
+
+---
+
 ## v0.2.2 (2026-02-18)
 
 ### 🐛 Critical Bug Fix
