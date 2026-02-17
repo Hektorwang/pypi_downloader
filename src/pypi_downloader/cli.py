@@ -1079,85 +1079,86 @@ def main() -> None:
     # Resolve dependencies with pip-compile if requested
     final_requirements_path = Path(requirements_path)
     if args.resolve_deps:
+        logger.info("=" * 60)
+        logger.info("Starting dependency resolution with pip-compile...")
+        logger.info("=" * 60)
+        
+        # Generate resolved file name: original_name.txt -> original_name.txt.tmp
+        resolved_file = Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
+        
+        logger.info(f"Input file: {requirements_path}")
+        logger.info(f"Output file: {resolved_file}")
+        
         if args.all_versions:
-            logger.warning(
-                "--resolve-deps is ignored when --all-versions is enabled "
-                "(all versions will be downloaded regardless of dependencies)"
+            logger.info("Note: --all-versions is enabled, version pins will be ignored during download")
+
+        try:
+            # Build pip-compile command
+            pip_compile_cmd = [
+                "pip-compile",
+                str(requirements_path),
+                "-o",
+                str(resolved_file),
+                "--no-header",
+                "--verbose",  # Changed from --quiet to --verbose for logging
+            ]
+
+            # Add index URL if using CN mirrors
+            if args.cn:
+                # Use first CN mirror for dependency resolution
+                mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+                logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
+                pip_compile_cmd.extend(["-i", mirror_url])
+            else:
+                logger.info("Using official PyPI for dependency resolution")
+
+            logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
+            logger.info("This may take a while depending on the number of packages...")
+            
+            result = subprocess.run(
+                pip_compile_cmd, capture_output=True, text=True, check=True
             )
-        else:
+            
+            # Log pip-compile output
+            if result.stdout:
+                logger.info("pip-compile output:")
+                for line in result.stdout.strip().split('\n'):
+                    logger.info(f"  {line}")
+            
+            if result.stderr:
+                logger.debug("pip-compile stderr:")
+                for line in result.stderr.strip().split('\n'):
+                    logger.debug(f"  {line}")
+            
             logger.info("=" * 60)
-            logger.info("Starting dependency resolution with pip-compile...")
+            logger.info(f"✔ Dependencies resolved successfully!")
+            logger.info(f"✔ Resolved file saved to: {resolved_file}")
+            if args.all_versions:
+                logger.info("✔ Will download all Python 3 versions of resolved packages")
             logger.info("=" * 60)
             
-            # Generate resolved file name: original_name.txt -> original_name.txt.tmp
-            resolved_file = Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
-            
-            logger.info(f"Input file: {requirements_path}")
-            logger.info(f"Output file: {resolved_file}")
+            final_requirements_path = resolved_file
 
-            try:
-                # Build pip-compile command
-                pip_compile_cmd = [
-                    "pip-compile",
-                    str(requirements_path),
-                    "-o",
-                    str(resolved_file),
-                    "--no-header",
-                    "--verbose",  # Changed from --quiet to --verbose for logging
-                ]
-
-                # Add index URL if using CN mirrors
-                if args.cn:
-                    # Use first CN mirror for dependency resolution
-                    mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-                    logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
-                    pip_compile_cmd.extend(["-i", mirror_url])
-                else:
-                    logger.info("Using official PyPI for dependency resolution")
-
-                logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
-                logger.info("This may take a while depending on the number of packages...")
-                
-                result = subprocess.run(
-                    pip_compile_cmd, capture_output=True, text=True, check=True
-                )
-                
-                # Log pip-compile output
-                if result.stdout:
-                    logger.info("pip-compile output:")
-                    for line in result.stdout.strip().split('\n'):
-                        logger.info(f"  {line}")
-                
-                if result.stderr:
-                    logger.debug("pip-compile stderr:")
-                    for line in result.stderr.strip().split('\n'):
-                        logger.debug(f"  {line}")
-                
-                logger.info("=" * 60)
-                logger.info(f"✔ Dependencies resolved successfully!")
-                logger.info(f"✔ Resolved file saved to: {resolved_file}")
-                logger.info("=" * 60)
-                
-                final_requirements_path = resolved_file
-
-            except FileNotFoundError:
-                logger.error("=" * 60)
-                logger.error("❌ pip-compile command not found!")
-                logger.error("Please install pip-tools: pip install pip-tools")
-                logger.error("=" * 60)
-                return
-            except subprocess.CalledProcessError as e:
-                logger.error("=" * 60)
-                logger.error("❌ Failed to resolve dependencies!")
-                logger.error(f"Error: {e.stderr}")
-                logger.error("=" * 60)
-                return
-            # pylint: disable=W0718 # Catching too general exception Exception
-            except Exception as e:
-                logger.error("=" * 60)
-                logger.error(f"❌ Unexpected error resolving dependencies: {e}")
-                logger.error("=" * 60)
-                return
+        except FileNotFoundError:
+            logger.error("=" * 60)
+            logger.error("❌ pip-compile command not found!")
+            logger.error("Please install pip-tools: pip install pip-tools")
+            logger.error("=" * 60)
+            return
+        except subprocess.CalledProcessError as e:
+            logger.error("=" * 60)
+            logger.error("❌ Failed to resolve dependencies!")
+            logger.error(f"Error: {e.stderr}")
+            logger.error("=" * 60)
+            return
+        # pylint: disable=W0718 # Catching too general exception Exception
+        except Exception as e:
+            logger.error("=" * 60)
+            logger.error(f"❌ Unexpected error resolving dependencies: {e}")
+            logger.error("=" * 60)
+            return
+    elif args.all_versions:
+        logger.info("All versions mode enabled: downloading all Python 3 versions of each package")
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
     logger.debug(f"Using requirements file: {final_requirements_path.absolute()}")

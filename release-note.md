@@ -1,5 +1,36 @@
 # Release Notes
 
+## v0.3.1 (2026-02-18)
+
+### 🐛 Bug Fix
+
+#### Fixed --resolve-deps and --all-versions Interaction
+- **Critical fix**: `--resolve-deps` and `--all-versions` now work together correctly
+- **Before**: `--resolve-deps` was completely ignored when `--all-versions` was enabled
+- **After**: Both flags work in combination:
+  1. `--resolve-deps` resolves all transitive dependencies using pip-compile
+  2. `--all-versions` downloads all Python 3 versions of the resolved packages
+
+#### Use Case
+Build a comprehensive internal PyPI mirror with all dependencies and all versions:
+```bash
+pypi-downloader -r requirements.txt --resolve-deps --all-versions --cn
+```
+
+**Example workflow:**
+- Input: `requirements.txt` contains only `numpy`
+- Step 1 (--resolve-deps): pip-compile generates `requirements.txt.tmp` with `numpy==1.26.4, pandas==2.2.0, ...` (all dependencies)
+- Step 2 (--all-versions): Downloads ALL Python 3 versions of each resolved package
+  - numpy: 1.19.0, 1.20.0, ..., 1.26.4
+  - pandas: 1.0.0, 1.1.0, ..., 2.2.0
+  - etc.
+
+### 📝 Enhanced Logging
+- Added clear message when both flags are used together
+- Shows that version pins will be ignored during download phase
+
+---
+
 ## v0.3.0 (2026-02-18)
 
 ### 🎉 Major Features
@@ -121,16 +152,38 @@ pypi-downloader -r requirements.txt --cn
 pypi-downloader -r requirements.txt --resolve-deps --cn
 # Creates: requirements.txt.tmp with resolved dependencies
 
+# Download all Python 3 versions of packages
+pypi-downloader -r requirements.txt --all-versions --cn
+
+# Combine --resolve-deps and --all-versions
+# This will: 1) resolve all dependencies, 2) download all Python 3 versions of each
+pypi-downloader -r requirements.txt --resolve-deps --all-versions --cn
+# Example: requirements.txt has "numpy", pip-compile adds "numpy==1.26.4"
+# Then downloads ALL Python 3 versions of numpy (1.19.0, 1.20.0, ..., 1.26.4)
+
 # View debug logs showing download URLs
 tail -f pypi-downloader.log
 
-# All features work together
+# Complete workflow for internal PyPI mirror
 pypi-downloader -r requirements.txt \
+  --resolve-deps \
   --all-versions \
   --cn \
-  --resolve-deps \
   --build-index
 ```
+
+### 💡 Feature Interaction
+
+#### --resolve-deps + --all-versions
+These two flags work together:
+1. **--resolve-deps**: Uses pip-compile to resolve all transitive dependencies
+   - Input: `requirements.txt` with `numpy`
+   - Output: `requirements.txt.tmp` with `numpy==1.26.4, pandas==2.2.0, ...` (all dependencies)
+2. **--all-versions**: Downloads all Python 3 versions, ignoring version pins
+   - Reads package names from resolved file
+   - Downloads ALL Python 3 versions of each package (e.g., numpy 1.19.0 through 1.26.4)
+
+**Use case**: Build a comprehensive internal PyPI mirror with all dependencies and all versions
 
 ### 🐛 Bug Fixes
 
@@ -139,6 +192,9 @@ pypi-downloader -r requirements.txt \
 - Fixed progress tracking for skipped and failed downloads
 - Fixed --resolve-deps not producing visible output
 - Fixed resolved file location (now in same directory as input file)
+- **Fixed --resolve-deps and --all-versions interaction**: They now work together correctly
+  - Previously: --resolve-deps was ignored when --all-versions was enabled
+  - Now: --resolve-deps resolves dependencies, --all-versions downloads all versions of resolved packages
 
 ### 🔄 Breaking Changes
 
