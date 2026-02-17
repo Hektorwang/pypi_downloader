@@ -22,9 +22,11 @@ Your development environment is in an internal network without direct internet a
 - ✅ **One-time download**: Get all versions and platforms in a single run
 - ✅ **Heterogeneous support**: Works for teams with mixed Python versions and architectures
 - ✅ **Dependency resolution**: Automatically includes all transitive dependencies
-- ✅ **Production-ready**: SHA-256 verification, retry logic, and mirror fallback
-- ✅ **Fast**: Async concurrent downloads (256 streams by default)
+- ✅ **Production-ready**: SHA-256 verification with PyPI API hashes, retry logic, and mirror fallback
+- ✅ **Smart caching**: Verifies existing files and skips re-download if hash matches
+- ✅ **Fast**: Async concurrent downloads (256 streams by default) with optimized hash computation
 - ✅ **China-friendly**: Built-in support for 14 Chinese mirrors
+- ✅ **Mirror-safe**: Uses pip User-Agent to avoid being blocked by PyPI mirrors
 
 ---
 
@@ -33,13 +35,15 @@ Your development environment is in an internal network without direct internet a
 - **All versions download** – download all Python 3 versions of each package with `--all-versions`
 - **Multi-mirror fallback** – retries the next mirror automatically if one fails (14 Chinese mirrors + official PyPI)
 - **Async & concurrent** – hundreds of files in parallel without blocking (default: 256 streams)
-- **Hash verification** – SHA-256 integrity check on every file
+- **Hash verification** – SHA-256 integrity check using PyPI API hashes for every file
+- **Smart skip** – verifies existing files with hash, skips re-download if valid
 - **Dependency resolution** – uses pip-compile to resolve all transitive dependencies
 - **Platform filtering** – download only wheels for specific Python version, ABI, or platform
 - **Dry-run mode** – preview URLs or disk usage before you download
 - **Rich terminal UI** – colorful tables and progress logs via [Rich][rich]
 - **PyPI index builder** – automatically build pip-compatible index with dir2pi
 - **Python 3 only** – automatically ignores Python 2 packages
+- **Mirror-friendly** – uses pip User-Agent to avoid being blocked
 
 ---
 

@@ -508,24 +508,49 @@ class PackageDownloader:
         with file_path.open("rb") as f:
             # Read file in chunks to handle large files efficiently without
             # loading entire file into memory
-            # while chunk := f.read(8192):  # Read 8KB chunks
-            #     h.update(chunk)]
-            h.update(f.read()) 
+            while chunk := f.read(8192):  # Read 8KB chunks
+                h.update(chunk)
         return h.hexdigest()
 
-    async def download_file(self, url: str, filename: str) -> bool:
+    async def download_file(self, url: str, filename: str, expected_hash: Optional[str] = None) -> bool:
         """
         Download a file with retry logic and hash verification.
 
         Args:
             url: The file URL to download.
             filename: The target filename.
+            expected_hash: Expected SHA-256 hash from PyPI API (format: "sha256=...").
 
         Returns:
             True if download succeeded or file exists with matching hash.
         """
         dest_path: Path = self.download_dir / filename
         rewritten_url: str = self.rewrite_url(url)
+
+        # Check if file already exists and verify hash if provided
+        if dest_path.exists():
+            if expected_hash:
+                # Extract hash value from "sha256=..." format
+                if expected_hash.startswith("sha256="):
+                    expected_hash_value = expected_hash[7:]  # Remove "sha256=" prefix
+                else:
+                    expected_hash_value = expected_hash
+
+                # Compute hash of existing file
+                existing_hash = self.compute_hash(dest_path)
+
+                if existing_hash == expected_hash_value:
+                    logger.debug(f"File exists with valid hash, skipping: {filename}")
+                    return True
+                else:
+                    logger.warning(
+                        f"File exists but hash mismatch, re-downloading: {filename}"
+                    )
+                    # Continue to download
+            else:
+                # No hash provided, trust existing file
+                logger.debug(f"File already exists, skipping download: {filename}")
+                return True
 
         for attempt in range(1, self.DEFAULT_RETRIES + 1):
             try:
@@ -536,16 +561,21 @@ class PackageDownloader:
                     resp.raise_for_status()  # Check for HTTP errors (4xx/5xx)
                     content: bytes = await resp.read()
 
-                    if dest_path.exists():
-                        # Compute hash of existing file for comparison
-                        current_hash: str = self.compute_hash(dest_path)
-                        # Compute hash of newly downloaded content
-                        new_hash: str = hashlib.sha256(content).hexdigest()
+                    # Verify hash if provided
+                    if expected_hash:
+                        if expected_hash.startswith("sha256="):
+                            expected_hash_value = expected_hash[7:]
+                        else:
+                            expected_hash_value = expected_hash
 
-                        if current_hash == new_hash:
-                            logger.info(f"Already exists and matches: " f"{filename}")
-                            return True
-                        logger.warning(f"Hash mismatch, re-downloading:" f" {filename}")
+                        downloaded_hash = hashlib.sha256(content).hexdigest()
+
+                        if downloaded_hash != expected_hash_value:
+                            logger.error(
+                                f"Hash verification failed for {filename}: "
+                                f"expected {expected_hash_value}, got {downloaded_hash}"
+                            )
+                            return False
 
                     # Ensure directory exists
                     self.download_dir.mkdir(parents=True, exist_ok=True)
@@ -642,6 +672,11 @@ class PackageDownloader:
                         url: str = file_info["url"]
                         filename: str = file_info["filename"]
 
+                        # Get hash from PyPI API (digests field)
+                        expected_hash: Optional[str] = None
+                        if "digests" in file_info and "sha256" in file_info["digests"]:
+                            expected_hash = f"sha256={file_info['digests']['sha256']}"
+
                         # Apply filters
                         if not self.matches_filter(
                             filename, 
@@ -659,7 +694,7 @@ class PackageDownloader:
                             logger.info(f"[Dry-run] Would download: {final_url}")
                             download_success_count += 1  # Count as success in dry-run
                         else:
-                            if await self.download_file(final_url, filename):
+                            if await self.download_file(final_url, filename, expected_hash):
                                 download_success_count += 1
 
                 if total_files > 0 and download_success_count == total_files:
@@ -699,7 +734,12 @@ class PackageDownloader:
         )
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
-        async with aiohttp.ClientSession() as self.session:
+        # Set User-Agent to mimic pip for better compatibility with PyPI mirrors
+        headers = {
+            "User-Agent": f"pip/24.0 (python {'.'.join(map(str, __import__('sys').version_info[:3]))})"
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as self.session:
             valid_lines: List[str] = []
             with self.requirements_file.open("r", encoding="utf-8") as f:
                 for line in f:
