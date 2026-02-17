@@ -880,6 +880,7 @@ class PackageDownloader:
 
         async with aiohttp.ClientSession(headers=headers) as self.session:
             # Parse valid lines from requirements file
+            logger.debug(f"Reading requirements from: {self.requirements_file.absolute()}")
             valid_lines: List[str] = []
             with self.requirements_file.open("r", encoding="utf-8") as f:
                 for line in f:
@@ -1084,9 +1085,15 @@ def main() -> None:
                 "(all versions will be downloaded regardless of dependencies)"
             )
         else:
-            logger.info("Resolving dependencies with pip-compile...")
-            resolved_file = download_dir / "requirements-resolved.txt"
-            download_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("=" * 60)
+            logger.info("Starting dependency resolution with pip-compile...")
+            logger.info("=" * 60)
+            
+            # Generate resolved file name: original_name.txt -> original_name.txt.tmp
+            resolved_file = Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
+            
+            logger.info(f"Input file: {requirements_path}")
+            logger.info(f"Output file: {resolved_file}")
 
             try:
                 # Build pip-compile command
@@ -1096,36 +1103,65 @@ def main() -> None:
                     "-o",
                     str(resolved_file),
                     "--no-header",
-                    "--quiet",
+                    "--verbose",  # Changed from --quiet to --verbose for logging
                 ]
 
                 # Add index URL if using CN mirrors
                 if args.cn:
                     # Use first CN mirror for dependency resolution
-                    pip_compile_cmd.extend(
-                        ["-i", "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"]
-                    )
+                    mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+                    logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
+                    pip_compile_cmd.extend(["-i", mirror_url])
+                else:
+                    logger.info("Using official PyPI for dependency resolution")
 
+                logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
+                logger.info("This may take a while depending on the number of packages...")
+                
                 result = subprocess.run(
                     pip_compile_cmd, capture_output=True, text=True, check=True
                 )
-                logger.info(f"Dependencies resolved and saved to {resolved_file}")
+                
+                # Log pip-compile output
+                if result.stdout:
+                    logger.info("pip-compile output:")
+                    for line in result.stdout.strip().split('\n'):
+                        logger.info(f"  {line}")
+                
+                if result.stderr:
+                    logger.debug("pip-compile stderr:")
+                    for line in result.stderr.strip().split('\n'):
+                        logger.debug(f"  {line}")
+                
+                logger.info("=" * 60)
+                logger.info(f"✔ Dependencies resolved successfully!")
+                logger.info(f"✔ Resolved file saved to: {resolved_file}")
+                logger.info("=" * 60)
+                
                 final_requirements_path = resolved_file
 
             except FileNotFoundError:
-                logger.error(
-                    "pip-compile command not found. Please install pip-tools: pip install pip-tools"
-                )
+                logger.error("=" * 60)
+                logger.error("❌ pip-compile command not found!")
+                logger.error("Please install pip-tools: pip install pip-tools")
+                logger.error("=" * 60)
                 return
             except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to resolve dependencies: {e.stderr}")
+                logger.error("=" * 60)
+                logger.error("❌ Failed to resolve dependencies!")
+                logger.error(f"Error: {e.stderr}")
+                logger.error("=" * 60)
                 return
             # pylint: disable=W0718 # Catching too general exception Exception
             except Exception as e:
-                logger.error(f"Unexpected error resolving dependencies: {e}")
+                logger.error("=" * 60)
+                logger.error(f"❌ Unexpected error resolving dependencies: {e}")
+                logger.error("=" * 60)
                 return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
+    logger.debug(f"Using requirements file: {final_requirements_path.absolute()}")
+    
     # Pass the timeout arguments directly to the PackageDownloader constructor
     downloader = PackageDownloader(
         requirements_file=final_requirements_path,

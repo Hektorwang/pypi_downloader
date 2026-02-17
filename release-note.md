@@ -20,6 +20,14 @@
 - **tqdm integration**: Logs use `tqdm.write()` to prevent progress bar corruption
 - **Debug mode**: Shows download URLs in real-time with `logger.debug(f"Downloading: {url}")`
 
+#### Improved Dependency Resolution (--resolve-deps)
+- **Enhanced logging**: Detailed output during pip-compile execution
+- **Verbose mode**: Shows all dependency resolution steps
+- **Better file naming**: Resolved file is now `{input_file}.tmp` (e.g., `requirements.txt.tmp`)
+- **Clear status messages**: Visual separators and success/error indicators
+- **Mirror support**: Logs which PyPI mirror is used for resolution
+- **Error handling**: Detailed error messages with troubleshooting hints
+
 #### True Parallel Downloads
 - **Fixed**: Files within each package now download concurrently (was sequential)
 - **Package-level parallelism**: Multiple packages download simultaneously
@@ -50,18 +58,40 @@
 # Format: {time} | {level} | {message}
 ```
 
+#### Dependency Resolution Logging
+```bash
+# Example output with --resolve-deps
+============================================================
+Starting dependency resolution with pip-compile...
+============================================================
+Input file: requirements.txt
+Output file: requirements.txt.tmp
+Using Chinese mirror for resolution: https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+Running command: pip-compile requirements.txt -o requirements.txt.tmp --no-header --verbose -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+This may take a while depending on the number of packages...
+pip-compile output:
+  Resolving dependencies...
+  [detailed resolution steps...]
+============================================================
+✔ Dependencies resolved successfully!
+✔ Resolved file saved to: requirements.txt.tmp
+============================================================
+```
+
 ### 📊 Performance Impact
 
 **Before v0.3.0:**
 - Package with 10 wheels: Downloaded sequentially (10x time)
 - No progress visibility
 - Logs could corrupt terminal output
+- Dependency resolution had minimal logging
 
 **After v0.3.0:**
 - Package with 10 wheels: Downloaded concurrently (~1x time, limited by semaphore)
 - Real-time progress bar showing completion percentage
 - Clean terminal output with logs above progress bar
 - Full debug logs saved to file for troubleshooting
+- Detailed dependency resolution logging
 
 **Example improvement:**
 - numpy with 15 wheel files (different platforms)
@@ -87,6 +117,10 @@ The progress bar and enhanced logging work automatically with all existing comma
 # Basic usage - see progress bar in action
 pypi-downloader -r requirements.txt --cn
 
+# Resolve dependencies with detailed logging
+pypi-downloader -r requirements.txt --resolve-deps --cn
+# Creates: requirements.txt.tmp with resolved dependencies
+
 # View debug logs showing download URLs
 tail -f pypi-downloader.log
 
@@ -103,10 +137,14 @@ pypi-downloader -r requirements.txt \
 - Fixed file-level downloads being sequential instead of concurrent
 - Fixed potential log output corruption (now uses tqdm.write)
 - Fixed progress tracking for skipped and failed downloads
+- Fixed --resolve-deps not producing visible output
+- Fixed resolved file location (now in same directory as input file)
 
 ### 🔄 Breaking Changes
 
-None - all changes are backward compatible.
+- **Resolved file naming**: Changed from `{download_dir}/requirements-resolved.txt` to `{input_dir}/{input_file}.tmp`
+  - Before: `./pypi/requirements-resolved.txt`
+  - After: `./requirements.txt.tmp` (same directory as input file)
 
 ---
 
