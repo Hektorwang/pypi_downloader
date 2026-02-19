@@ -20,10 +20,10 @@ import aiohttp
 from loguru import logger
 from rich.console import Console, Group
 from rich.live import Live
-from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
-from rich.panel import Panel
 
 
 class RichLogSink:
@@ -51,10 +51,10 @@ class RichLogSink:
         if not self.live:
             # vertical_overflow="visible" 让内容从底部开始
             self.live = Live(
-                self._render(), 
-                console=self.console, 
+                self._render(),
+                console=self.console,
                 refresh_per_second=10,
-                vertical_overflow="visible"
+                vertical_overflow="visible",
             )
             self.live.start()
 
@@ -64,7 +64,7 @@ class RichLogSink:
         max_width = 120  # 最大宽度
         msg = message.rstrip()
         if len(msg) > max_width:
-            msg = msg[:max_width-3] + "..."
+            msg = msg[: max_width - 3] + "..."
         self.lines.append(msg)
         self._update_display()
 
@@ -84,15 +84,11 @@ class RichLogSink:
         # 日志文本
         log_lines = list(self.lines)
         log_text = "\n".join(log_lines) if log_lines else ""
-        
+
         # 如果有进度条，使用 Group 组合日志和进度条
         if self.task_id is not None:
             separator = "─" * 80
-            return Group(
-                Text(log_text),
-                Text(separator, style="dim"),
-                self.progress
-            )
+            return Group(Text(log_text), Text(separator, style="dim"), self.progress)
         return Text(log_text)
 
     def _update_display(self):
@@ -150,7 +146,6 @@ class PackageDownloader:
         abi: Optional[str] = None,
         platform: Optional[str] = None,
         all_versions: bool = False,
-        save_url_list: bool = False,
         url_list_path: Optional[Path] = None,
     ) -> None:
         """
@@ -166,7 +161,6 @@ class PackageDownloader:
             abi: ABI filter (e.g., "cp311", "abi3", "none").
             platform: Platform filter (e.g., "manylinux_2_17_x86_64", "win_amd64", "any").
             all_versions: If True, download all available versions of each package (Python 3 only).
-            save_url_list: If True, save list of downloaded URLs to a file.
             url_list_path: Path to save URL list. Defaults to ./url_list.txt in current directory.
         """
         self.requirements_file: Path = requirements_file
@@ -175,7 +169,6 @@ class PackageDownloader:
         self.semaphore: asyncio.Semaphore = asyncio.Semaphore(concurrency)
         self.download_urls: List[str] = []
         self.download_dir = download_dir
-        self.save_url_list = save_url_list
         self.url_list_file = (
             url_list_path if url_list_path else Path.cwd() / "url_list.txt"
         )
@@ -208,8 +201,10 @@ class PackageDownloader:
                 "All versions mode enabled: downloading all Python 3 versions of each package"
             )
 
-        if save_url_list:
-            logger.info(f"URL list will be saved to: {self.url_list_file}")
+        if dry_run:
+            logger.info(
+                f"Dry-run mode: URL list will be saved to: {self.url_list_file}"
+            )
 
         if python_version or abi or platform:
             filters = []
@@ -321,7 +316,7 @@ class PackageDownloader:
         return None
 
     @staticmethod
-    def parse_wheel_filename(filename: str) -> Optional[Dict[str, str]]:
+    def parse_wheel_filename(filename: str) -> Optional[Dict[str, Optional[str]]]:
         """
         Parse a wheel filename according to PEP 425.
 
@@ -389,7 +384,7 @@ class PackageDownloader:
             return True
 
         # Always ignore Python 2 only packages
-        file_python_tags = wheel_info["python"].split(".")
+        file_python_tags = (wheel_info["python"] or "").split(".")
 
         # Check if it's Python 2 only (py2, py20, py21, etc. but NOT py2.py3)
         is_py2_only = any(
@@ -419,7 +414,7 @@ class PackageDownloader:
 
         # Check ABI filter
         if abi:
-            file_abi_tags = wheel_info["abi"].split(".")
+            file_abi_tags = (wheel_info["abi"] or "").split(".")
             filter_abi_tags = abi.split(".")
 
             if not any(tag in file_abi_tags for tag in filter_abi_tags):
@@ -427,7 +422,7 @@ class PackageDownloader:
 
         # Check platform filter
         if platform:
-            file_platform_tags = wheel_info["platform"].split(".")
+            file_platform_tags = (wheel_info["platform"] or "").split(".")
             filter_platform_tags = platform.split(".")
 
             if not any(tag in file_platform_tags for tag in filter_platform_tags):
@@ -541,7 +536,7 @@ class PackageDownloader:
                 # Check wheel for Python 3 compatibility
                 wheel_info = self.parse_wheel_filename(filename)
                 if wheel_info:
-                    python_tags = wheel_info["python"].split(".")
+                    python_tags = (wheel_info["python"] or "").split(".")
                     # Has py3, py30+, cp3x, or py2.py3 tags
                     if any(
                         tag.startswith("py3") or tag.startswith("cp3")
@@ -555,9 +550,7 @@ class PackageDownloader:
 
         return python3_releases
 
-    def _count_downloadable_files(
-        self, metadata: Dict[str, Any], version: str
-    ) -> int:
+    def _count_downloadable_files(self, metadata: Dict[str, Any], version: str) -> int:
         """
         Count the number of files that would be downloaded for a package.
 
@@ -594,11 +587,11 @@ class PackageDownloader:
                     # Check if it was skipped due to Python 2
                     wheel_info = self.parse_wheel_filename(filename)
                     if wheel_info:
-                        file_python_tags = wheel_info["python"].split(".")
-                        is_py2_only = ("py2" in file_python_tags and not any(
-                            tag.startswith("py3") or tag.startswith("cp3") 
+                        file_python_tags = (wheel_info["python"] or "").split(".")
+                        is_py2_only = "py2" in file_python_tags and not any(
+                            tag.startswith("py3") or tag.startswith("cp3")
                             for tag in file_python_tags
-                        ))
+                        )
                         if is_py2_only:
                             skipped_py2 += 1
 
@@ -886,9 +879,9 @@ class PackageDownloader:
                 total_files = 0
                 for ver, version_files in versions_to_download.items():
                     for file_info in version_files:
-                        filename = file_info.get("filename", "")
+                        file_name = file_info.get("filename", "")
                         if self.matches_filter(
-                            filename, self.python_version, self.abi, self.platform
+                            file_name, self.python_version, self.abi, self.platform
                         ):
                             total_files += 1
 
@@ -989,7 +982,9 @@ class PackageDownloader:
 
         async with aiohttp.ClientSession(headers=headers) as self.session:
             # Parse valid lines from requirements file
-            logger.debug(f"Reading requirements from: {self.requirements_file.absolute()}")
+            logger.debug(
+                f"Reading requirements from: {self.requirements_file.absolute()}"
+            )
             valid_lines: List[str] = []
             with self.requirements_file.open("r", encoding="utf-8") as f:
                 for line in f:
@@ -1004,7 +999,7 @@ class PackageDownloader:
 
             # Phase 1: Fetch metadata and count total files
             logger.info("Phase 1: Fetching package metadata and counting files...")
-            package_metadata_list = []
+            package_metadata_list: List[Tuple[str, Optional[Dict[str, Any]], int]] = []
             total_files = 0
 
             for line in valid_lines:
@@ -1039,12 +1034,13 @@ class PackageDownloader:
             # Close progress bar
             self._close_progress_bar()
 
-            if self.save_url_list and self.download_urls:
+            # Save URL list in dry-run mode
+            if self.dry_run and self.download_urls:
                 self.url_list_file.write_text(
                     "\n".join(self.download_urls), encoding="utf-8"
                 )
                 logger.info(f"✔ URL list saved to {self.url_list_file}")
-            elif self.save_url_list:
+            elif self.dry_run:
                 logger.info(
                     "No download URLs were collected. URL list file "
                     "will not be created."
@@ -1062,7 +1058,7 @@ def configure_logging(use_rich: bool = False) -> Optional[RichLogSink]:
     logger.remove()
 
     rich_sink = None
-    
+
     if use_rich:
         # Create Rich sink for terminal display (20 lines + 1 progress line = 21 total)
         rich_sink = RichLogSink(max_lines=20)
@@ -1100,7 +1096,7 @@ def main() -> None:
     """Main entry point for command-line execution."""
     # Start with simple console logging for initial setup
     configure_logging(use_rich=False)
-    
+
     parser = argparse.ArgumentParser(description="PyPI Package Downloader")
     parser.add_argument(
         "requirements",
@@ -1159,24 +1155,14 @@ def main() -> None:
         help="Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)",
     )
     parser.add_argument(
-        "--resolve-deps",
-        action="store_true",
-        help="Use pip-compile to resolve dependencies before downloading (requires pip-tools)",
-    )
-    parser.add_argument(
         "--all-versions",
         action="store_true",
         help="Download all available Python 3 versions of each package (ignores version pins in requirements.txt)",
     )
     parser.add_argument(
-        "--save-url-list",
-        action="store_true",
-        help="Save list of downloaded URLs to a file (default: ./url_list.txt)",
-    )
-    parser.add_argument(
         "--url-list-path",
         type=str,
-        help="Custom path for URL list file (default: ./url_list.txt)",
+        help="Custom path for URL list file (default: ./url_list.txt, only used in dry-run mode)",
     )
 
     args = parser.parse_args()
@@ -1201,88 +1187,89 @@ def main() -> None:
     # Determine URL list path
     url_list_path = Path(args.url_list_path) if args.url_list_path else None
 
-    # Resolve dependencies with pip-compile if requested
+    # Always resolve dependencies with pip-compile
     final_requirements_path = Path(requirements_path)
-    if args.resolve_deps:
+    logger.info("=" * 60)
+    logger.info("Resolving dependencies with pip-compile...")
+    logger.info("=" * 60)
+
+    # Generate resolved file name: original_name.txt -> original_name.txt.tmp
+    resolved_file = (
+        Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
+    )
+
+    logger.info(f"Input file: {requirements_path}")
+    logger.info(f"Output file: {resolved_file}")
+
+    if args.all_versions:
+        logger.info(
+            "Note: --all-versions is enabled, version pins will be ignored during download"
+        )
+
+    try:
+        # Build pip-compile command
+        pip_compile_cmd = [
+            "pip-compile",
+            str(requirements_path),
+            "-o",
+            str(resolved_file),
+            "--no-header",
+            "--verbose",  # Changed from --quiet to --verbose for logging
+        ]
+
+        # Add index URL if using CN mirrors
+        if args.cn:
+            # Use first CN mirror for dependency resolution
+            mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+            logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
+            pip_compile_cmd.extend(["-i", mirror_url])
+        else:
+            logger.info("Using official PyPI for dependency resolution")
+
+        logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
+        logger.info("This may take a while depending on the number of packages...")
+
+        result = subprocess.run(
+            pip_compile_cmd, capture_output=True, text=True, check=True
+        )
+
+        # Log pip-compile stderr (errors/warnings) only
+        if result.stderr:
+            logger.debug("pip-compile stderr:")
+            for line in result.stderr.strip().split("\n"):
+                logger.debug(f"  {line}")
+
         logger.info("=" * 60)
-        logger.info("Starting dependency resolution with pip-compile...")
-        logger.info("=" * 60)
-        
-        # Generate resolved file name: original_name.txt -> original_name.txt.tmp
-        resolved_file = Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
-        
-        logger.info(f"Input file: {requirements_path}")
-        logger.info(f"Output file: {resolved_file}")
-        
+        logger.info(f"✔ Dependencies resolved successfully!")
+        logger.info(f"✔ Resolved file saved to: {resolved_file}")
         if args.all_versions:
-            logger.info("Note: --all-versions is enabled, version pins will be ignored during download")
+            logger.info("✔ Will download all Python 3 versions of resolved packages")
+        logger.info("=" * 60)
 
-        try:
-            # Build pip-compile command
-            pip_compile_cmd = [
-                "pip-compile",
-                str(requirements_path),
-                "-o",
-                str(resolved_file),
-                "--no-header",
-                "--verbose",  # Changed from --quiet to --verbose for logging
-            ]
+        final_requirements_path = resolved_file
 
-            # Add index URL if using CN mirrors
-            if args.cn:
-                # Use first CN mirror for dependency resolution
-                mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-                logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
-                pip_compile_cmd.extend(["-i", mirror_url])
-            else:
-                logger.info("Using official PyPI for dependency resolution")
-
-            logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
-            logger.info("This may take a while depending on the number of packages...")
-            
-            result = subprocess.run(
-                pip_compile_cmd, capture_output=True, text=True, check=True
-            )
-            
-            # Log pip-compile stderr (errors/warnings) only
-            if result.stderr:
-                logger.debug("pip-compile stderr:")
-                for line in result.stderr.strip().split('\n'):
-                    logger.debug(f"  {line}")
-            
-            logger.info("=" * 60)
-            logger.info(f"✔ Dependencies resolved successfully!")
-            logger.info(f"✔ Resolved file saved to: {resolved_file}")
-            if args.all_versions:
-                logger.info("✔ Will download all Python 3 versions of resolved packages")
-            logger.info("=" * 60)
-            
-            final_requirements_path = resolved_file
-
-        except FileNotFoundError:
-            logger.error("=" * 60)
-            logger.error("❌ pip-compile command not found!")
-            logger.error("Please install pip-tools: pip install pip-tools")
-            logger.error("=" * 60)
-            return
-        except subprocess.CalledProcessError as e:
-            logger.error("=" * 60)
-            logger.error("❌ Failed to resolve dependencies!")
-            logger.error(f"Error: {e.stderr}")
-            logger.error("=" * 60)
-            return
-        # pylint: disable=W0718 # Catching too general exception Exception
-        except Exception as e:
-            logger.error("=" * 60)
-            logger.error(f"❌ Unexpected error resolving dependencies: {e}")
-            logger.error("=" * 60)
-            return
-    elif args.all_versions:
-        logger.info("All versions mode enabled: downloading all Python 3 versions of each package")
+    except FileNotFoundError:
+        logger.error("=" * 60)
+        logger.error("❌ pip-compile command not found!")
+        logger.error("Please install pip-tools: pip install pip-tools")
+        logger.error("=" * 60)
+        return
+    except subprocess.CalledProcessError as e:
+        logger.error("=" * 60)
+        logger.error("❌ Failed to resolve dependencies!")
+        logger.error(f"Error: {e.stderr}")
+        logger.error("=" * 60)
+        return
+    # pylint: disable=W0718 # Catching too general exception Exception
+    except Exception as e:
+        logger.error("=" * 60)
+        logger.error(f"❌ Unexpected error resolving dependencies: {e}")
+        logger.error("=" * 60)
+        return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
     logger.info(f"Using requirements file: {final_requirements_path.absolute()}")
-    
+
     # Pass the timeout arguments directly to the PackageDownloader constructor
     downloader = PackageDownloader(
         requirements_file=final_requirements_path,
@@ -1294,25 +1281,25 @@ def main() -> None:
         abi=args.abi,
         platform=args.platform,
         all_versions=args.all_versions,
-        save_url_list=args.save_url_list,
         url_list_path=url_list_path,
     )
-    
+
     # Now switch to Rich Live display for download progress
     logger.info("=" * 60)
     logger.info("Switching to live progress display...")
     logger.info("=" * 60)
-    
+
     # Reconfigure logging with Rich
     rich_sink = configure_logging(use_rich=True)
-    
+
     # Set rich_sink for progress tracking
     downloader.rich_sink = rich_sink
 
     package_sync_results: List[Dict[str, Any]] = asyncio.run(downloader.run())
-    
+
     # Stop rich sink before showing final table
-    rich_sink.stop()
+    if rich_sink:
+        rich_sink.stop()
 
     console = Console()
     table = Table(
@@ -1326,11 +1313,11 @@ def main() -> None:
     table.add_column("Status", justify="center", style="bold")
     table.add_column("Details", style="dim")
 
-    for result in package_sync_results:
-        package = result.get("package", "N/A")
-        version = result.get("version", "N/A")
-        status = result.get("status", "Unknown")
-        details = result.get("details", "")
+    for pkg_result in package_sync_results:
+        package = pkg_result.get("package", "N/A")
+        version = pkg_result.get("version", "N/A")
+        status = pkg_result.get("status", "Unknown")
+        details = pkg_result.get("details", "")
 
         status_style = ""
         if status == "Synchronized":

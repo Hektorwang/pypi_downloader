@@ -1,5 +1,72 @@
 # Release Notes
 
+## v0.5.0 (2026-02-19)
+
+### 🎉 Major Changes
+
+#### Automatic Dependency Resolution (Breaking Change)
+- **REMOVED `--resolve-deps` flag**: Dependency resolution is now ALWAYS enabled
+- **pip-tools is now required**: Must be installed for the tool to work
+- All downloads now automatically resolve transitive dependencies using pip-compile
+- Resolved dependencies are saved to `{input_file}.tmp` (e.g., `requirements.txt.tmp`)
+- Simplifies workflow - no need to remember to add `--resolve-deps` flag
+
+#### Dry-Run Mode Enhancement (Breaking Change)
+- **REMOVED `--save-url-list` flag**: URL list saving is now automatic in dry-run mode
+- **`--dry-run` now always saves URL list**: When using `--dry-run`, URLs are automatically saved to `./url_list.txt`
+- **`--url-list-path` only works with `--dry-run`**: Custom URL list path is only used in dry-run mode
+- Simplifies workflow - dry-run mode is now specifically for URL preview and export
+
+### 🔄 Breaking Changes
+
+1. **Removed flags**:
+   - `--resolve-deps` - dependency resolution is now always enabled
+   - `--save-url-list` - URL list saving is now automatic in dry-run mode
+
+2. **New requirements**:
+   - pip-tools is now a required dependency (was optional)
+
+3. **Behavior changes**:
+   - Every run now resolves dependencies first (creates `.tmp` file)
+   - `--dry-run` always saves URL list (no separate flag needed)
+   - `--url-list-path` only applies when using `--dry-run`
+
+### 📝 Migration Guide
+
+**Before v0.5.0:**
+```bash
+# Resolve dependencies and download
+pypi-downloader -r requirements.txt --resolve-deps --cn
+
+# Save URL list
+pypi-downloader -r requirements.txt --save-url-list
+
+# Dry-run without URL list
+pypi-downloader -r requirements.txt --dry-run
+```
+
+**After v0.5.0:**
+```bash
+# Dependencies are always resolved automatically
+pypi-downloader -r requirements.txt --cn
+
+# Dry-run automatically saves URL list
+pypi-downloader -r requirements.txt --dry-run
+
+# Dry-run with custom URL list path
+pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
+```
+
+### 🎯 Rationale
+
+These changes simplify the tool's interface and make it more predictable:
+
+1. **Always resolve dependencies**: This is the expected behavior for building internal mirrors - you want all dependencies, not just what's explicitly listed
+2. **Dry-run = URL export**: Dry-run mode is primarily used to preview and export URLs, so saving the URL list should be automatic
+3. **Fewer flags to remember**: Simpler command-line interface with sensible defaults
+
+---
+
 ## v0.4.3 (2026-02-18)
 
 ### 🔧 Improvements

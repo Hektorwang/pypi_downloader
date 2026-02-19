@@ -1,6 +1,6 @@
 # PyPI Downloader
 
-A fast, asynchronous Python CLI tool to **bulk-download packages from PyPI mirrors** with automatic fallback, concurrency control, hash verification, and rich terminal output.
+A fast, asynchronous Python CLI tool to **download packages from PyPI mirrors**.
 
 ## 🎯 Purpose
 
@@ -39,10 +39,9 @@ Your development environment is in an internal network without direct internet a
 - **Hash verification** – SHA-256 integrity check using PyPI API hashes for every file
 - **Smart skip** – verifies existing files with hash, skips re-download if valid (100x faster on re-runs)
 - **Non-blocking I/O** – uses thread pool for file operations, never blocks the event loop
-- **Dependency resolution** – uses pip-compile to resolve all transitive dependencies
+- **Automatic dependency resolution** – always uses pip-compile to resolve all transitive dependencies
 - **Platform filtering** – download only wheels for specific Python version, ABI, or platform
-- **Dry-run mode** – preview URLs or disk usage before you download
-- **Rich terminal UI** – colorful tables and progress logs via [Rich][rich]
+- **Dry-run mode** – preview URLs before you download (automatically saves URL list)
 - **PyPI index builder** – automatically build pip-compatible index with dir2pi
 - **Python 3 only** – automatically ignores Python 2 packages
 - **Mirror-friendly** – uses pip User-Agent to avoid being blocked
@@ -84,7 +83,8 @@ pypi-downloader requirements.txt \
 usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
                        [--download-dir DIR] [--cn] [--build-index]
                        [--python-version PYTHON_VERSION] [--abi ABI]
-                       [--platform PLATFORM] [--resolve-deps]
+                       [--platform PLATFORM] [--all-versions]
+                       [--url-list-path PATH]
                        [requirements]
 
 Async PyPI mirror downloader
@@ -96,7 +96,7 @@ options:
   -h, --help            show this help message and exit
   -r, --requirement REQUIREMENT_FILE
                         Path to requirements.txt (pip-style)
-  --dry-run             Only collect URLs, do not download
+  --dry-run             Only collect URLs and save to file, do not download
   --concurrency N       Max concurrent downloads (default: 256)
   --download-dir DIR    Folder to save packages (default: ./pypi)
   --cn                  Use Chinese PyPI mirrors with automatic fallback
@@ -105,9 +105,11 @@ options:
                         Filter by Python version tag (e.g., cp311, py3, py2.py3)
   --abi ABI             Filter by ABI tag (e.g., cp311, abi3, none)
   --platform PLATFORM   Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)
-  --resolve-deps        Use pip-compile to resolve dependencies before downloading
   --all-versions        Download all available Python 3 versions of each package
-  --save-url-list       Save list of downloaded URLs to a file (default: ./url_list.txt)
+  --url-list-path PATH  Custom path for URL list file (default: ./url_list.txt, only used in dry-run mode)
+```
+
+Note: Dependencies are always resolved automatically using pip-compile (requires pip-tools).
   --url-list-path PATH  Custom path for URL list file
 ```
 
@@ -130,27 +132,34 @@ Perfect for building an internal PyPI mirror with all Python 3 versions:
 
 ```bash
 # Download all versions of packages listed in requirements.txt
+# Dependencies are automatically resolved with pip-compile
 pypi-downloader -r requirements.txt --all-versions --cn --build-index
 
-# This will download ALL Python 3 compatible versions, for example:
-# numpy: 1.19.0, 1.19.1, ..., 1.26.4 (all versions)
-# pandas: 1.0.0, 1.0.1, ..., 2.2.2 (all versions)
+# This will:
+# 1. Resolve all dependencies using pip-compile
+# 2. Download ALL Python 3 compatible versions, for example:
+#    numpy: 1.19.0, 1.19.1, ..., 1.26.4 (all versions)
+#    pandas: 1.0.0, 1.0.1, ..., 2.2.2 (all versions)
 ```
 
 Use case: Your internal network has machines with different Python 3 versions (3.8, 3.9, 3.11) and architectures (x86_64, ARM). This command downloads all wheels so any machine can install what it needs.
 
-### Resolve Dependencies and Download
+### Dry-Run Mode (Preview URLs)
 
-Automatically resolve all transitive dependencies using pip-compile:
+Preview what will be downloaded and save URL list without actually downloading:
 
 ```bash
-pypi-downloader -r requirements.txt --resolve-deps --cn
+# Dry-run mode automatically saves URLs to ./url_list.txt
+pypi-downloader -r requirements.txt --dry-run --cn
+
+# Save to custom location
+pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
 ```
 
-This will:
-1. Run `pip-compile` to resolve all dependencies
-2. Save resolved dependencies to `pypi/requirements-resolved.txt`
-3. Download all packages including sub-dependencies
+Use cases:
+- Audit what will be downloaded before actual download
+- Use with other download tools (wget, aria2c)
+- Keep a record of package URLs
 
 ### Platform-Specific Downloads
 
@@ -179,10 +188,10 @@ pypi-downloader -r requirements.txt \
 Download packages and build a pip-compatible index:
 
 ```bash
+# Dependencies are automatically resolved
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
   --cn \
-  --resolve-deps \
   --build-index
 ```
 
@@ -197,6 +206,7 @@ pip install --index-url=file:///var/www/pypi/simple/ numpy
 Use Chinese mirrors for faster downloads in China:
 
 ```bash
+# Dependencies are automatically resolved using the Chinese mirror
 pypi-downloader -r requirements.txt --cn
 ```
 
@@ -204,34 +214,14 @@ Supported mirrors:
 - Aliyun, Tencent Cloud, Tsinghua, USTC, BFSU, SJTU, NJU, and more
 - Automatic fallback if one mirror fails
 
-### Save URL List
-
-Save all download URLs to a file for later use or auditing:
-
-```bash
-# Save to default location (./url_list.txt)
-pypi-downloader -r requirements.txt --save-url-list
-
-# Save to custom location
-pypi-downloader -r requirements.txt --save-url-list --url-list-path /path/to/urls.txt
-```
-
-Use cases:
-- Audit what will be downloaded before actual download
-- Use with other download tools (wget, aria2c)
-- Keep a record of downloaded packages
-
 ## 🔧 Requirements
 
 - Python 3.11+
 - aiohttp, loguru, rich (installed automatically)
+- pip-tools (required for automatic dependency resolution)
 
 ### Optional Dependencies
 
-- **pip-tools** – for `--resolve-deps` (dependency resolution)
-  ```bash
-  pip install pip-tools
-  ```
 - **pip2pi** – for `--build-index` (PyPI index building)
   ```bash
   pip install pip2pi
