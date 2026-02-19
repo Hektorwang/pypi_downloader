@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import random
 import re
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 from loguru import logger
+from packaging.version import InvalidVersion, Version
 from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
@@ -60,11 +62,69 @@ class RichLogSink:
 
     def write(self, message):
         """写入日志消息"""
-        # 截断过长的消息（避免换行）
-        max_width = 120  # 最大宽度
         msg = message.rstrip()
-        if len(msg) > max_width:
-            msg = msg[: max_width - 3] + "..."
+
+        # Truncate long messages to 120 characters
+        if len(msg) > 120:
+            # Check if message contains a URL (http:// or https://)
+            if "http://" in msg or "https://" in msg:
+                # For URLs, extract and show: prefix + mirror domain + "..." + package filename
+                # This shows which mirror is being used and what package
+                try:
+                    # Find the URL in the message
+                    url_start = msg.find("http://")
+                    if url_start == -1:
+                        url_start = msg.find("https://")
+
+                    if url_start != -1:
+                        prefix = msg[:url_start]  # e.g., "Downloading: "
+                        url_part = msg[url_start:]
+
+                        # Extract domain (e.g., "mirrors.aliyun.com")
+                        # Format: http://domain/path/to/file
+                        protocol_end = url_part.find("://") + 3
+                        path_start = url_part.find("/", protocol_end)
+
+                        if path_start != -1:
+                            domain = url_part[
+                                :path_start
+                            ]  # e.g., "http://mirrors.aliyun.com"
+                            path = url_part[
+                                path_start:
+                            ]  # e.g., "/pypi/web/packages/.../file.whl"
+
+                            # Extract package filename from path (last component)
+                            filename = path.split("/")[-1]
+
+                            # Build truncated message: prefix + domain + "..." + filename
+                            # Format: "Downloading: http://mirrors.aliyun.com...black-24.1.1.whl"
+                            truncated = f"{prefix}{domain}...{filename}"
+
+                            # If still too long, truncate filename
+                            if len(truncated) > 120:
+                                base_len = len(f"{prefix}{domain}...")
+                                available = 120 - base_len - 3  # Reserve 3 for "..."
+                                if available > 10:
+                                    filename = filename[:available] + "..."
+                                    truncated = f"{prefix}{domain}...{filename}"
+                                else:
+                                    # Fallback: just show domain
+                                    truncated = f"{prefix}{domain}..."
+
+                            msg = truncated
+                        else:
+                            # Fallback: show beginning
+                            msg = msg[:117] + "..."
+                    else:
+                        # No URL found, show beginning
+                        msg = msg[:117] + "..."
+                except Exception:
+                    # If parsing fails, fallback to simple truncation
+                    msg = msg[:117] + "..."
+            else:
+                # For non-URL messages, show the beginning
+                msg = msg[:117] + "..."
+
         self.lines.append(msg)
         self._update_display()
 
@@ -132,12 +192,17 @@ class PackageDownloader:
         "https://mirrors.zju.edu.cn/pypi",
     ]
 
-    DEFAULT_CONCURRENCY: int = 256
-    DEFAULT_RETRIES: int = 5
+    OFFICIAL_PYPI = "https://pypi.org"
+
+    DEFAULT_CONCURRENCY: int = 16  # Reduced for better stability with mirrors
+    DEFAULT_RETRIES: int = (
+        32  # Total retries across all mirrors (15 sites * 2 retries + buffer)
+    )
+    RETRIES_PER_MIRROR: int = 2  # Retries per mirror before switching
 
     def __init__(
         self,
-        requirements_file: Path,
+        requirements_content: str,
         dry_run: bool = False,
         concurrency: int = DEFAULT_CONCURRENCY,
         download_dir: Path = Path.cwd() / "pypi",
@@ -146,13 +211,14 @@ class PackageDownloader:
         abi: Optional[str] = None,
         platform: Optional[str] = None,
         all_versions: bool = False,
+        latest_patch: bool = False,
         url_list_path: Optional[Path] = None,
     ) -> None:
         """
         Initialize the PackageDownloader.
 
         Args:
-            requirements_file: Path to the requirements.txt file.
+            requirements_content: Content of requirements (resolved dependencies as string).
             dry_run: If True, only generates URL list without downloading.
             concurrency: Maximum number of concurrent downloads.
             download_dir: Directory to save downloaded packages.
@@ -161,9 +227,10 @@ class PackageDownloader:
             abi: ABI filter (e.g., "cp311", "abi3", "none").
             platform: Platform filter (e.g., "manylinux_2_17_x86_64", "win_amd64", "any").
             all_versions: If True, download all available versions of each package (Python 3 only).
+            latest_patch: If True, download only the latest patch version for each minor version.
             url_list_path: Path to save URL list. Defaults to ./url_list.txt in current directory.
         """
-        self.requirements_file: Path = requirements_file
+        self.requirements_content: str = requirements_content
         self.session: Optional[aiohttp.ClientSession] = None
         self.dry_run: bool = dry_run
         self.semaphore: asyncio.Semaphore = asyncio.Semaphore(concurrency)
@@ -176,10 +243,24 @@ class PackageDownloader:
             total=None, connect=60, sock_read=60
         )
         self.use_cn_mirrors = use_cn_mirrors
+
+        # Initialize mirror list: randomize CN mirrors, then add official PyPI at the end
+        if use_cn_mirrors:
+            self._available_mirrors = self.PYPI_MIRRORS.copy()
+            random.shuffle(self._available_mirrors)  # Randomize CN mirrors
+            self._available_mirrors.append(
+                self.OFFICIAL_PYPI
+            )  # Official PyPI as last resort
+        else:
+            self._available_mirrors = [self.OFFICIAL_PYPI]
+
         self._current_mirror_idx: int = 0
+
         self.python_version = python_version
         self.abi = abi
         self.platform = platform
+        self.all_versions = all_versions
+        self.latest_patch = latest_patch
         self.all_versions = all_versions
 
         # Progress bar fields
@@ -192,13 +273,21 @@ class PackageDownloader:
             f"sock_read={self.timeout.sock_read}s"
         )
         if use_cn_mirrors:
-            logger.info(f"Using Chinese mirrors with fallback")
+            logger.info(
+                f"Using Chinese mirrors (randomized) with official PyPI as fallback"
+            )
+            logger.info(f"Mirror order: {len(self._available_mirrors)} sites total")
         else:
             logger.info(f"Using official PyPI (https://pypi.org)")
 
         if all_versions:
             logger.info(
                 "All versions mode enabled: downloading all Python 3 versions of each package"
+            )
+
+        if latest_patch:
+            logger.info(
+                "Latest patch mode enabled: downloading only the latest patch version for each minor version"
             )
 
         if dry_run:
@@ -224,9 +313,9 @@ class PackageDownloader:
             The URL of the next mirror to try.
         """
         self._current_mirror_idx = (self._current_mirror_idx + 1) % len(
-            self.PYPI_MIRRORS
+            self._available_mirrors
         )
-        return self.PYPI_MIRRORS[self._current_mirror_idx]
+        return self._available_mirrors[self._current_mirror_idx]
 
     def current_mirror_base(self, path: str = "") -> str:
         """
@@ -238,10 +327,7 @@ class PackageDownloader:
         Returns:
             标准化后的完整URL, 保证以斜杠结尾
         """
-        if self.use_cn_mirrors:
-            base_url = self.PYPI_MIRRORS[self._current_mirror_idx]
-        else:
-            base_url = "https://pypi.org"
+        base_url = self._available_mirrors[self._current_mirror_idx]
 
         parsed = urlparse(base_url)
 
@@ -446,15 +532,18 @@ class PackageDownloader:
         last_exception = None
         package_for_url: str = re.sub(r"\[.*?\]", "", package_with_extras)
 
-        # If not using CN mirrors, only try once with official PyPI
-        max_attempts = len(self.PYPI_MIRRORS) if self.use_cn_mirrors else 1
+        # Try all available mirrors
+        max_attempts = len(self._available_mirrors)
 
         for _ in range(max_attempts):
-            url = (
-                f"{self.current_mirror_base('web/json/')}/{package_for_url}"
-                if self.use_cn_mirrors
-                else f"https://pypi.org/pypi/{package_for_url}/json"
-            )
+            current_mirror = self._available_mirrors[self._current_mirror_idx]
+
+            # Determine URL format based on mirror type
+            if current_mirror == self.OFFICIAL_PYPI:
+                url = f"https://pypi.org/pypi/{package_for_url}/json"
+            else:
+                url = f"{self.current_mirror_base('web/json/')}/{package_for_url}"
+
             try:
                 logger.debug(f"Trying metadata URL: {url}")
                 assert self.session is not None
@@ -466,15 +555,11 @@ class PackageDownloader:
                         raise aiohttp.ClientError(f"Invalid JSON: {str(e)}")
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_exception = e
-                if self.use_cn_mirrors:
-                    logger.warning(
-                        f"Mirror {url} failed: {str(e)}. " f"Trying next mirror..."
-                    )
-                    await self.get_next_mirror()
-                    continue
-                else:
-                    logger.error(f"Official PyPI failed: {str(e)}")
-                    return None
+                logger.warning(
+                    f"Mirror {current_mirror} failed: {str(e)}. Trying next mirror..."
+                )
+                await self.get_next_mirror()
+                continue
             # pylint: disable=W0718 # Catching too general exception Exception
             except Exception as e:
                 logger.error(
@@ -550,13 +635,76 @@ class PackageDownloader:
 
         return python3_releases
 
+    def filter_latest_patch_versions(
+        self, versions_dict: Dict[str, List[Dict[str, Any]]]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Filter versions to keep only the latest patch version for each minor version.
+
+        For example:
+        - 2.1.3, 2.1.5, 2.1.9 → keep only 2.1.9
+        - 2.2.2, 2.2.8 → keep only 2.2.8
+        - 3.0.0 → keep 3.0.0
+
+        Args:
+            versions_dict: Dict mapping version strings to their release file lists.
+
+        Returns:
+            Filtered dict with only the latest patch version for each minor version.
+        """
+        # Group versions by (major, minor)
+        versions_by_minor: Dict[Tuple[int, int], List[Tuple[Version, str]]] = {}
+
+        for version_str in versions_dict.keys():
+            try:
+                version_obj = Version(version_str)
+                # Group by (major, minor)
+                # For pre-release versions, still use their base version for grouping
+                key = (version_obj.major, version_obj.minor)
+
+                if key not in versions_by_minor:
+                    versions_by_minor[key] = []
+
+                versions_by_minor[key].append((version_obj, version_str))
+            except InvalidVersion:
+                # If version can't be parsed, keep it (better safe than sorry)
+                logger.warning(
+                    f"Could not parse version '{version_str}', keeping it anyway"
+                )
+                continue
+
+        # For each minor version group, keep only the latest
+        filtered_versions = {}
+        for minor_key, version_list in versions_by_minor.items():
+            # Sort by version object (PEP 440 compliant)
+            version_list.sort(key=lambda x: x[0], reverse=True)
+            # Take the highest version
+            latest_version_obj, latest_version_str = version_list[0]
+
+            filtered_versions[latest_version_str] = versions_dict[latest_version_str]
+
+            # Log what we're keeping
+            all_versions_in_group = [v[1] for v in version_list]
+            if len(all_versions_in_group) > 1:
+                logger.debug(
+                    f"Minor version {minor_key[0]}.{minor_key[1]}.x: "
+                    f"keeping {latest_version_str} out of {len(all_versions_in_group)} versions"
+                )
+
+        logger.info(
+            f"Filtered from {len(versions_dict)} to {len(filtered_versions)} versions "
+            f"(kept latest patch for each minor version)"
+        )
+
+        return filtered_versions
+
     def _count_downloadable_files(self, metadata: Dict[str, Any], version: str) -> int:
         """
         Count the number of files that would be downloaded for a package.
 
         Args:
             metadata: The full package metadata.
-            version: The version to count files for (ignored if all_versions=True).
+            version: The version to count files for (ignored if all_versions=True or latest_patch=True).
 
         Returns:
             Integer count of files that match filters and would be downloaded.
@@ -565,8 +713,11 @@ class PackageDownloader:
         skipped_py2 = 0
 
         # Determine which versions to count
-        if self.all_versions:
+        if self.all_versions or self.latest_patch:
             versions_to_count = self.find_all_python3_versions(metadata)
+            # Apply latest-patch filter if enabled
+            if self.latest_patch:
+                versions_to_count = self.filter_latest_patch_versions(versions_to_count)
         else:
             version_info = self.find_version_info(metadata, version)
             if not version_info:
@@ -608,11 +759,16 @@ class PackageDownloader:
             url: The original download URL.
 
         Returns:
-            The rewritten URL pointing to the current mirror (if using CN mirrors), or original URL.
+            The rewritten URL pointing to the current mirror, or original URL for official PyPI.
         """
-        if self.use_cn_mirrors and url.startswith("https://files.pythonhosted.org/"):
-            # Replace the official PyPI download host with the mirror's
-            # equivalent path
+        current_mirror = self._available_mirrors[self._current_mirror_idx]
+
+        # If using official PyPI, return original URL
+        if current_mirror == self.OFFICIAL_PYPI:
+            return url
+
+        # For CN mirrors, rewrite the URL
+        if url.startswith("https://files.pythonhosted.org/"):
             return url.replace(
                 "https://files.pythonhosted.org/packages/",
                 self.current_mirror_base("web/packages/"),
@@ -706,7 +862,7 @@ class PackageDownloader:
         self, url: str, filename: str, expected_hash: Optional[str] = None
     ) -> bool:
         """
-        Download a file with retry logic and hash verification.
+        Download a file with retry logic, mirror switching, and hash verification.
 
         Args:
             url: The file URL to download.
@@ -717,10 +873,6 @@ class PackageDownloader:
             True if download succeeded or file exists with matching hash.
         """
         dest_path: Path = self.download_dir / filename
-        rewritten_url: str = self.rewrite_url(url)
-
-        # Log the URL being downloaded (file only, not to screen)
-        logger.opt(depth=1).log("TRACE", f"Downloading: {rewritten_url}")
 
         # Check if file already exists (async)
         loop = asyncio.get_event_loop()
@@ -752,7 +904,17 @@ class PackageDownloader:
                 self._update_progress(1)  # Update progress for skipped file
                 return True
 
+        # Save current mirror index to restore later
+        original_mirror_idx = self._current_mirror_idx
+        mirror_attempts = 0  # Track attempts on current mirror
+
         for attempt in range(1, self.DEFAULT_RETRIES + 1):
+            # Rewrite URL with current mirror
+            rewritten_url: str = self.rewrite_url(url)
+
+            # Log the URL being downloaded (file only, not to screen)
+            logger.opt(depth=1).log("TRACE", f"Downloading: {rewritten_url}")
+
             try:
                 assert self.session is not None, "ClientSession is not initialized."
                 async with self.session.get(
@@ -775,6 +937,8 @@ class PackageDownloader:
                                 f"Hash verification failed for {filename}: "
                                 f"expected {expected_hash_value}, got {downloaded_hash}"
                             )
+                            # Restore original mirror index
+                            self._current_mirror_idx = original_mirror_idx
                             return False
 
                     # Ensure directory exists (async)
@@ -788,28 +952,68 @@ class PackageDownloader:
 
                     logger.info(f"Downloaded: {filename}")
                     self._update_progress(1)  # Update progress for successful download
+                    # Restore original mirror index
+                    self._current_mirror_idx = original_mirror_idx
                     return True
+
             except aiohttp.ClientError as e:
+                mirror_attempts += 1
                 logger.warning(
-                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: Client error "
-                    f"downloading {rewritten_url}: {e}"
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES} (mirror attempt {mirror_attempts}/{self.RETRIES_PER_MIRROR}): "
+                    f"Client error downloading {rewritten_url}: {e}"
                 )
+
+                # Switch mirror after RETRIES_PER_MIRROR attempts
+                if mirror_attempts >= self.RETRIES_PER_MIRROR:
+                    old_mirror = self._available_mirrors[self._current_mirror_idx]
+                    await self.get_next_mirror()
+                    new_mirror = self._available_mirrors[self._current_mirror_idx]
+                    logger.info(
+                        f"Switching mirror for {filename}: {old_mirror} → {new_mirror}"
+                    )
+                    mirror_attempts = 0  # Reset counter for new mirror
+
             except asyncio.TimeoutError:
+                mirror_attempts += 1
                 logger.warning(
-                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: Timeout (no data "
-                    f"received for {self.timeout.sock_read}s) downloading "
-                    f"{rewritten_url}"
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES} (mirror attempt {mirror_attempts}/{self.RETRIES_PER_MIRROR}): "
+                    f"Timeout (no data received for {self.timeout.sock_read}s) downloading {rewritten_url}"
                 )
+
+                # Switch mirror after RETRIES_PER_MIRROR attempts
+                if mirror_attempts >= self.RETRIES_PER_MIRROR:
+                    old_mirror = self._available_mirrors[self._current_mirror_idx]
+                    await self.get_next_mirror()
+                    new_mirror = self._available_mirrors[self._current_mirror_idx]
+                    logger.info(
+                        f"Switching mirror for {filename}: {old_mirror} → {new_mirror}"
+                    )
+                    mirror_attempts = 0  # Reset counter for new mirror
+
             # pylint: disable=W0718 # Catching too general exception Exception
             except Exception as e:
+                mirror_attempts += 1
                 logger.warning(
-                    f"Attempt {attempt}/{self.DEFAULT_RETRIES}: An unexpected "
-                    f"error downloading {rewritten_url}: {e}"
+                    f"Attempt {attempt}/{self.DEFAULT_RETRIES} (mirror attempt {mirror_attempts}/{self.RETRIES_PER_MIRROR}): "
+                    f"An unexpected error downloading {rewritten_url}: {e}"
                 )
+
+                # Switch mirror after RETRIES_PER_MIRROR attempts
+                if mirror_attempts >= self.RETRIES_PER_MIRROR:
+                    old_mirror = self._available_mirrors[self._current_mirror_idx]
+                    await self.get_next_mirror()
+                    new_mirror = self._available_mirrors[self._current_mirror_idx]
+                    logger.info(
+                        f"Switching mirror for {filename}: {old_mirror} → {new_mirror}"
+                    )
+                    mirror_attempts = 0  # Reset counter for new mirror
+
         logger.error(
             f"Failed to download after {self.DEFAULT_RETRIES} retries: {filename}"
         )
         self._update_progress(1)  # Update progress even for failed downloads
+        # Restore original mirror index
+        self._current_mirror_idx = original_mirror_idx
         return False
 
     async def process_package(self, line: str) -> Dict[str, Any]:
@@ -853,7 +1057,7 @@ class PackageDownloader:
                 # Determine which versions to download
                 versions_to_download: Dict[str, List[Dict[str, Any]]] = {}
 
-                if self.all_versions:
+                if self.all_versions or self.latest_patch:
                     # Download all Python 3 compatible versions
                     versions_to_download = self.find_all_python3_versions(metadata)
                     if not versions_to_download:
@@ -861,9 +1065,19 @@ class PackageDownloader:
                             "No Python 3 compatible versions found"
                         )
                         return package_status
-                    package_status["version"] = (
-                        f"all ({len(versions_to_download)} versions)"
-                    )
+
+                    # Apply latest-patch filter if enabled
+                    if self.latest_patch:
+                        versions_to_download = self.filter_latest_patch_versions(
+                            versions_to_download
+                        )
+                        package_status["version"] = (
+                            f"latest-patch ({len(versions_to_download)} versions)"
+                        )
+                    else:
+                        package_status["version"] = (
+                            f"all ({len(versions_to_download)} versions)"
+                        )
                 else:
                     # Download only the specified version
                     version_info: Optional[List[Dict[str, Any]]] = (
@@ -955,9 +1169,7 @@ class PackageDownloader:
         Returns:
             List of package status dictionaries.
         """
-        logger.info(
-            f"Starting package download process from: " f"{self.requirements_file}"
-        )
+        logger.info(f"Starting package download process")
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
         # Set User-Agent to mimic pip for better compatibility with PyPI mirrors
@@ -981,21 +1193,18 @@ class PackageDownloader:
         )
 
         async with aiohttp.ClientSession(headers=headers) as self.session:
-            # Parse valid lines from requirements file
-            logger.debug(
-                f"Reading requirements from: {self.requirements_file.absolute()}"
-            )
+            # Parse valid lines from requirements content
+            logger.debug(f"Parsing requirements from resolved dependencies")
             valid_lines: List[str] = []
-            with self.requirements_file.open("r", encoding="utf-8") as f:
-                for line in f:
-                    stripped_line = line.strip()
-                    # Only add lines that are not empty and not comments
-                    if stripped_line and not stripped_line.startswith("#"):
-                        # Further check if it's a parseable package line
-                        if self.parse_package_line(line):
-                            valid_lines.append(line)
-                        else:
-                            logger.warning(f"Skipping unparseable line: {line.strip()}")
+            for line in self.requirements_content.splitlines():
+                stripped_line = line.strip()
+                # Only add lines that are not empty and not comments
+                if stripped_line and not stripped_line.startswith("#"):
+                    # Further check if it's a parseable package line
+                    if self.parse_package_line(line):
+                        valid_lines.append(line)
+                    else:
+                        logger.warning(f"Skipping unparseable line: {line.strip()}")
 
             # Phase 1: Fetch metadata and count total files
             logger.info("Phase 1: Fetching package metadata and counting files...")
@@ -1120,8 +1329,8 @@ def main() -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=256,
-        help="Maximum concurrent downloads (default: 256)",
+        default=16,
+        help="Maximum concurrent downloads (default: 16)",
     )
     parser.add_argument(
         "--download-dir",
@@ -1160,12 +1369,27 @@ def main() -> None:
         help="Download all available Python 3 versions of each package (ignores version pins in requirements.txt)",
     )
     parser.add_argument(
+        "--latest-patch",
+        action="store_true",
+        help="Download only the latest patch version for each minor version (e.g., keep 2.1.9 from 2.1.3, 2.1.5, 2.1.9). Mutually exclusive with --all-versions",
+    )
+    parser.add_argument(
         "--url-list-path",
         type=str,
         help="Custom path for URL list file (default: ./url_list.txt, only used in dry-run mode)",
     )
 
     args = parser.parse_args()
+
+    # Validate argument combinations
+    if args.latest_patch and args.all_versions:
+        logger.error(
+            "--latest-patch and --all-versions are mutually exclusive. "
+            "Use --latest-patch alone to download only latest patch versions, "
+            "or --all-versions to download all versions."
+        )
+        parser.print_help()
+        return
 
     # Determine requirements file path
     requirements_path = None
@@ -1188,33 +1412,28 @@ def main() -> None:
     url_list_path = Path(args.url_list_path) if args.url_list_path else None
 
     # Always resolve dependencies with pip-compile
-    final_requirements_path = Path(requirements_path)
     logger.info("=" * 60)
     logger.info("Resolving dependencies with pip-compile...")
     logger.info("=" * 60)
 
-    # Generate resolved file name: original_name.txt -> original_name.txt.tmp
-    resolved_file = (
-        Path(requirements_path).parent / f"{Path(requirements_path).name}.tmp"
-    )
-
     logger.info(f"Input file: {requirements_path}")
-    logger.info(f"Output file: {resolved_file}")
 
     if args.all_versions:
         logger.info(
             "Note: --all-versions is enabled, version pins will be ignored during download"
         )
 
+    resolved_content = None  # Will store resolved dependencies in memory
+
     try:
-        # Build pip-compile command
+        # Build pip-compile command (output to stdout using -o -)
         pip_compile_cmd = [
             "pip-compile",
             str(requirements_path),
             "-o",
-            str(resolved_file),
+            "-",  # Output to stdout
             "--no-header",
-            "--verbose",  # Changed from --quiet to --verbose for logging
+            # No --verbose: reduce output noise
         ]
 
         # Add index URL if using CN mirrors
@@ -1233,20 +1452,28 @@ def main() -> None:
             pip_compile_cmd, capture_output=True, text=True, check=True
         )
 
+        # Store resolved content in memory
+        resolved_content = result.stdout
+
         # Log pip-compile stderr (errors/warnings) only
         if result.stderr:
             logger.debug("pip-compile stderr:")
             for line in result.stderr.strip().split("\n"):
                 logger.debug(f"  {line}")
 
+        # Count resolved packages
+        resolved_lines = [
+            line
+            for line in resolved_content.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+
         logger.info("=" * 60)
         logger.info(f"✔ Dependencies resolved successfully!")
-        logger.info(f"✔ Resolved file saved to: {resolved_file}")
+        logger.info(f"✔ Resolved {len(resolved_lines)} packages in memory")
         if args.all_versions:
             logger.info("✔ Will download all Python 3 versions of resolved packages")
         logger.info("=" * 60)
-
-        final_requirements_path = resolved_file
 
     except FileNotFoundError:
         logger.error("=" * 60)
@@ -1268,11 +1495,10 @@ def main() -> None:
         return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
-    logger.info(f"Using requirements file: {final_requirements_path.absolute()}")
 
-    # Pass the timeout arguments directly to the PackageDownloader constructor
+    # Pass the resolved content to PackageDownloader
     downloader = PackageDownloader(
-        requirements_file=final_requirements_path,
+        requirements_content=resolved_content,
         dry_run=args.dry_run,
         concurrency=args.concurrency,
         download_dir=download_dir,
@@ -1281,6 +1507,7 @@ def main() -> None:
         abi=args.abi,
         platform=args.platform,
         all_versions=args.all_versions,
+        latest_patch=args.latest_patch,
         url_list_path=url_list_path,
     )
 

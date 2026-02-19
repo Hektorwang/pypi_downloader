@@ -1,69 +1,193 @@
 # Release Notes
 
+## v0.6.2 (2026-02-19)
+
+### 🔧 Improvements
+
+#### Randomized Mirror Selection (--cn mode)
+- **Smart mirror order**: When using `--cn`, the 14 Chinese mirrors are randomized at startup
+- **Official PyPI as last resort**: PyPI official site is always tried last, after all CN mirrors fail
+- **Load balancing**: Different runs use different mirror orders, distributing load across mirrors
+- **Better reliability**: Avoids always hitting the same potentially problematic mirror first
+
+#### Enhanced Mirror Switching Strategy
+- **Faster mirror rotation**: Now switches to next mirror after only 2 consecutive failures (was 5)
+- **Complete coverage**: With 15 sites (14 CN mirrors + 1 official PyPI) and 2 retries each, total retries increased to 32 (was 15)
+- **Better fault tolerance**: Each file can try all 15 mirror sites before giving up
+- **Reasoning**: Faster detection of problematic mirrors = less time wasted on failing mirrors
+
+**Impact:**
+- Before: 5 retries per mirror × 3 mirrors = 15 total retries
+- After: 2 retries per mirror × 15 sites = 30+ total retries
+- Result: All mirrors tried, faster failure detection, higher success rate
+
+#### Smarter Log Truncation for URLs
+- **URL-aware truncation**: Messages longer than 120 characters are now truncated intelligently
+- **For URLs**: Shows mirror domain + package filename to identify which mirror and package
+  - Before: `Downloading: http://mirrors.aliyun.com/pypi/web/packages/e8/e3/8519496759b4f15d73323b00f70bde3eb097efd177382a4bed389...`
+  - After: `Downloading: http://mirrors.aliyun.com...black-24.1.1-cp311-cp311-linux_x86_64.whl`
+- **For non-URLs**: Shows the BEGINNING (first 117 chars) as before
+- **Benefit**: You can now see both which mirror is being used AND what package is being downloaded
+
+### 📊 Performance Characteristics
+
+**Mirror selection with --cn:**
+```
+Startup: Randomize 14 CN mirrors → Append official PyPI at end
+Example order: [Tencent, USTC, Aliyun, ..., PyPI]
+Next run: Different random order → [BFSU, NJU, Tsinghua, ..., PyPI]
+```
+
+**Mirror switching behavior:**
+```
+File download attempt flow (15 sites total):
+1. Try site #1 (random CN mirror): attempt 1, 2 → fail → switch
+2. Try site #2 (random CN mirror): attempt 3, 4 → fail → switch
+3. Try site #3 (random CN mirror): attempt 5, 6 → fail → switch
+...
+14. Try site #14 (last CN mirror): attempt 27, 28 → fail → switch
+15. Try site #15 (official PyPI): attempt 29, 30 → fail → switch
+16. Cycle back to site #1: attempt 31, 32 → give up
+```
+
+**15 mirror sites:**
+- 14 Chinese mirrors (randomized order): Aliyun, Tencent, Tsinghua, USTC, BFSU, SJTU, NJU, NYIST, PKU, QLU, ZJU, NJTech, JLU, Neusoft
+- 1 Official PyPI (always last): https://pypi.org
+
+**Why randomize CN mirrors?**
+- Load balancing: Distributes traffic across all mirrors
+- Avoids hotspots: No single mirror gets hammered first every time
+- Better reliability: If one mirror is slow/down, different users hit it at different positions
+
+**Why 2 retries per mirror?**
+- Quick failure detection: If a mirror is down or blocking, we detect it in ~2-4 seconds instead of 10-20 seconds
+- More coverage: Try more mirrors instead of hammering the same failing mirror
+- Better for mirrors: Reduces load on problematic mirrors
+
+---
+
+## v0.6.1 (2026-02-19)
+
+### 🐛 Bug Fixes
+
+- **Fixed file count for --latest-patch**: Progress bar now shows correct total file count when using --latest-patch mode
+- Previously showed incorrect count (e.g., "1016/478 files") because filter wasn't applied during Phase 1 counting
+
+### 🔧 Performance Tuning
+
+- **Reduced default concurrency**: Changed from 32 to 16 for even better stability
+- Lower concurrency = higher success rate with mirrors
+- Fewer connection timeouts and retries
+- You can still increase with `--concurrency` if needed
+
+### 📝 Technical Details
+
+**File counting fix:**
+- `_count_downloadable_files()` now applies `latest_patch` filter during Phase 1
+- Ensures Phase 1 count matches Phase 2 actual downloads
+- Progress bar displays correctly: "478/478 files" instead of "1016/478 files"
+
+**Concurrency change:**
+- Default: 32 → 16
+- Reasoning: Better balance between speed and stability for large-scale downloads
+- With 15 retries and smart mirror switching, lower concurrency is more reliable
+
+---
+
+## v0.6.0 (2026-02-19)
+
+### 🎉 New Feature: Latest Patch Mode
+
+#### `--latest-patch` Flag
+Download only the latest patch version for each minor version, dramatically reducing download size while maintaining compatibility.
+
+**Important:** `--latest-patch` and `--all-versions` are mutually exclusive:
+- Use `--all-versions` to download ALL versions
+- Use `--latest-patch` to download only the latest patch for each minor version
+
+**Example:**
+```bash
+# Download all versions
+pypi-downloader -r requirements.txt --all-versions --cn
+# Result: 2.1.3, 2.1.5, 2.1.9, 2.2.2, 2.2.8 (all versions)
+
+# Download only latest patches (new feature)
+pypi-downloader -r requirements.txt --latest-patch --cn
+# Result: 2.1.9, 2.2.8 (only latest patch for each minor version)
+```
+
+**Benefits:**
+- **60-70% fewer files**: Reduces download from 30,000 to ~10,000 files
+- **Faster downloads**: Less data to transfer
+- **Less storage**: Saves disk space on your internal mirror
+- **Still compatible**: Patch versions should be backward compatible (per SemVer)
+
+**How it works:**
+- Groups versions by (major, minor): 2.1.x, 2.2.x, 3.0.x, etc.
+- Keeps only the highest patch version in each group
+- Uses PEP 440 compliant version comparison via `packaging` library
+- Handles pre-release versions correctly (alpha, beta, rc)
+
+**Use cases:**
+- Building internal PyPI mirrors with reasonable size
+- When you trust semantic versioning (patch = bug fixes only)
+- When storage/bandwidth is limited
+
+**Limitations:**
+- Mutually exclusive with `--all-versions` (use one or the other, not both)
+- May miss specific patch versions if needed for bug workarounds
+- Assumes packages follow semantic versioning correctly
+
+### 🐛 Bug Fixes
+
+- **Fixed dependency resolution**: pip-compile now correctly outputs to stdout using `-o -` parameter
+- Previously resolved 0 packages due to missing output redirection
+- **Fixed file count for --latest-patch**: Progress bar now shows correct total file count when using --latest-patch mode
+- Previously showed incorrect count because filter wasn't applied during Phase 1 counting
+
+### 🔧 Technical Improvements
+
+- pip-compile output is captured via `capture_output=True` instead of `-o` file parameter
+- Resolved dependencies are stored in memory as a string
+- PackageDownloader now accepts `requirements_content: str` instead of `requirements_file: Path`
+- No file system operations during dependency resolution phase
+- Cleaner logs: pip-compile's verbose output is hidden, only showing summary
+- Removed log message truncation: Full URLs are now displayed in Rich Live display (no 120-character limit)
+- **Enhanced retry mechanism**: Increased total retries from 5 to 15
+- **Smart mirror switching**: Automatically switches to next mirror after 5 consecutive failures (CN mirrors only)
+- **Better fault tolerance**: Each file gets up to 3 different mirrors before giving up
+- **Optimized concurrency**: Reduced default from 256 to 32 for better stability and higher success rate with mirrors
+- **New dependency**: Added `packaging>=21.0` for PEP 440 compliant version comparison
+
+### 📦 Dependencies
+
+- Added: `packaging>=21.0` (for version parsing and comparison)
+- Required: `pip-tools>=7.0.0`, `aiohttp>=3.11`, `loguru>=0.6`, `rich>=12.0`
+
+---
+
 ## v0.5.0 (2026-02-19)
 
 ### 🎉 Major Changes
 
 #### Automatic Dependency Resolution (Breaking Change)
-- **REMOVED `--resolve-deps` flag**: Dependency resolution is now ALWAYS enabled
-- **pip-tools is now required**: Must be installed for the tool to work
-- All downloads now automatically resolve transitive dependencies using pip-compile
-- Resolved dependencies are saved to `{input_file}.tmp` (e.g., `requirements.txt.tmp`)
-- Simplifies workflow - no need to remember to add `--resolve-deps` flag
 
-#### Dry-Run Mode Enhancement (Breaking Change)
-- **REMOVED `--save-url-list` flag**: URL list saving is now automatic in dry-run mode
-- **`--dry-run` now always saves URL list**: When using `--dry-run`, URLs are automatically saved to `./url_list.txt`
-- **`--url-list-path` only works with `--dry-run`**: Custom URL list path is only used in dry-run mode
-- Simplifies workflow - dry-run mode is now specifically for URL preview and export
+**Why reduce concurrency from 256 to 32?**
 
-### 🔄 Breaking Changes
+For large-scale downloads (20,000-30,000 files):
+- **Higher success rate**: 256 concurrent connections often overwhelm mirror servers, causing timeouts
+- **Fewer retries needed**: Lower concurrency = fewer failures = less time wasted on retries
+- **Better mirror compatibility**: Most mirrors handle 32 connections much better than 256
+- **Actual speed**: With smart mirror switching and fewer retries, 32 concurrent downloads may be faster overall
 
-1. **Removed flags**:
-   - `--resolve-deps` - dependency resolution is now always enabled
-   - `--save-url-list` - URL list saving is now automatic in dry-run mode
+**Estimated download times** (30,000 files):
+- First-time download: ~40-60 minutes (vs ~10-15 minutes with 256, but with many failures)
+- Incremental update: ~5-10 minutes (most files skipped due to hash verification)
 
-2. **New requirements**:
-   - pip-tools is now a required dependency (was optional)
-
-3. **Behavior changes**:
-   - Every run now resolves dependencies first (creates `.tmp` file)
-   - `--dry-run` always saves URL list (no separate flag needed)
-   - `--url-list-path` only applies when using `--dry-run`
-
-### 📝 Migration Guide
-
-**Before v0.5.0:**
+**You can still increase concurrency** if needed:
 ```bash
-# Resolve dependencies and download
-pypi-downloader -r requirements.txt --resolve-deps --cn
-
-# Save URL list
-pypi-downloader -r requirements.txt --save-url-list
-
-# Dry-run without URL list
-pypi-downloader -r requirements.txt --dry-run
+pypi-downloader -r requirements.txt --concurrency 128 --cn
 ```
-
-**After v0.5.0:**
-```bash
-# Dependencies are always resolved automatically
-pypi-downloader -r requirements.txt --cn
-
-# Dry-run automatically saves URL list
-pypi-downloader -r requirements.txt --dry-run
-
-# Dry-run with custom URL list path
-pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
-```
-
-### 🎯 Rationale
-
-These changes simplify the tool's interface and make it more predictable:
-
-1. **Always resolve dependencies**: This is the expected behavior for building internal mirrors - you want all dependencies, not just what's explicitly listed
-2. **Dry-run = URL export**: Dry-run mode is primarily used to preview and export URLs, so saving the URL list should be automatic
-3. **Fewer flags to remember**: Simpler command-line interface with sensible defaults
 
 ---
 
