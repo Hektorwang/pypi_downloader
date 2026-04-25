@@ -40,10 +40,10 @@ Your development environment is in an internal network without direct internet a
 - **Hash verification** – SHA-256 integrity check using PyPI API hashes for every file
 - **Smart skip** – verifies existing files with hash, skips re-download if valid (100x faster on re-runs)
 - **Non-blocking I/O** – uses thread pool for file operations, never blocks the event loop
-- **Automatic dependency resolution** – always uses pip-compile to resolve all transitive dependencies
+- **Automatic dependency resolution** – always uses `pip-compile` to resolve all transitive dependencies (no flag needed)
 - **Platform filtering** – download only wheels for specific Python version, ABI, or platform
 - **Dry-run mode** – preview URLs before you download (automatically saves URL list)
-- **PyPI index builder** – automatically build pip-compatible index with dir2pi
+- **Private PyPI server** – start an offline `pypiserver` instance with `--serve` after downloading
 - **Python 3 only** – automatically ignores Python 2 packages
 - **Mirror-friendly** – uses pip User-Agent to avoid being blocked
 
@@ -82,9 +82,9 @@ pypi-downloader requirements.txt \
 
 ```text
 usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
-                       [--download-dir DIR] [--cn] [--build-index]
+                       [--download-dir DIR] [--cn] [--serve] [--serve-port PORT]
                        [--python-version PYTHON_VERSION] [--abi ABI]
-                       [--platform PLATFORM] [--all-versions]
+                       [--platform PLATFORM] [--all-versions] [--latest-patch]
                        [--url-list-path PATH]
                        [requirements]
 
@@ -101,18 +101,20 @@ options:
   --concurrency N       Max concurrent downloads (default: 16)
   --download-dir DIR    Folder to save packages (default: ./pypi)
   --cn                  Use Chinese PyPI mirrors with automatic fallback
-  --build-index         Build PyPI-compatible index using dir2pi after downloading
+  --serve               Start a pypiserver private PyPI server from the
+                        download directory after downloading
+  --serve-port PORT     Port for the pypiserver (default: 8080, only used with --serve)
   --python-version PYTHON_VERSION
                         Filter by Python version tag (e.g., cp311, py3, py2.py3)
   --abi ABI             Filter by ABI tag (e.g., cp311, abi3, none)
   --platform PLATFORM   Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)
   --all-versions        Download all available Python 3 versions of each package
+  --latest-patch        Download only the latest patch version for each minor version.
+                        Mutually exclusive with --all-versions
   --url-list-path PATH  Custom path for URL list file (default: ./url_list.txt, only used in dry-run mode)
 ```
 
-Note: Dependencies are always resolved automatically using pip-compile (requires pip-tools).
-  --url-list-path PATH  Custom path for URL list file
-```
+> **Note:** Dependencies are always resolved automatically using `pip-compile` (requires `pip-tools`). No `--resolve-deps` flag needed.
 
 2025-07-29 12:34:56 | INFO | Packages will be downloaded to: /home/user/pypi
 2025-07-29 12:34:57 | INFO | Downloaded: numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.whl
@@ -134,13 +136,14 @@ Perfect for building an internal PyPI mirror with all Python 3 versions:
 ```bash
 # Download all versions of packages listed in requirements.txt
 # Dependencies are automatically resolved with pip-compile
-pypi-downloader -r requirements.txt --all-versions --cn --build-index
+pypi-downloader -r requirements.txt --all-versions --cn --serve
 
 # This will:
 # 1. Resolve all dependencies using pip-compile
 # 2. Download ALL Python 3 compatible versions, for example:
 #    numpy: 1.19.0, 1.19.1, ..., 1.26.4 (all versions)
 #    pandas: 1.0.0, 1.0.1, ..., 2.2.2 (all versions)
+# 3. Start a pypiserver on port 8080 after downloading
 ```
 
 Use case: Your internal network has machines with different Python 3 versions (3.8, 3.9, 3.11) and architectures (x86_64, ARM). This command downloads all wheels so any machine can install what it needs.
@@ -151,7 +154,7 @@ Download only the latest patch version for each minor version (60-70% fewer file
 
 ```bash
 # Download only latest patches: 2.1.9 (not 2.1.3, 2.1.5), 2.2.8 (not 2.2.2)
-pypi-downloader -r requirements.txt --latest-patch --cn --build-index
+pypi-downloader -r requirements.txt --latest-patch --cn --serve
 
 # Example reduction:
 # Before (--all-versions): numpy 1.19.0, 1.19.1, 1.19.2, ..., 1.26.4 (100+ versions)
@@ -215,20 +218,32 @@ pypi-downloader -r requirements.txt \
 
 ### Build Self-Hosted PyPI Mirror
 
-Download packages and build a pip-compatible index:
+Download packages and start a private PyPI server:
 
 ```bash
-# Dependencies are automatically resolved
+# Download packages (dependencies are automatically resolved via pip-compile)
+pypi-downloader -r requirements.txt \
+  --download-dir /var/www/pypi \
+  --cn
+
+# Download and immediately start the private PyPI server on port 8080 (default)
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
   --cn \
-  --build-index
+  --serve
+
+# Use a custom port
+pypi-downloader -r requirements.txt \
+  --download-dir /var/www/pypi \
+  --cn \
+  --serve \
+  --serve-port 9090
 ```
 
-Then use it with pip:
+Then install packages from the private server:
 
 ```bash
-pip install --index-url=file:///var/www/pypi/simple/ numpy
+pip install --index-url http://localhost:8080/simple/ numpy
 ```
 
 ### Chinese Mirror Support
@@ -252,9 +267,11 @@ Supported mirrors:
 
 ### Optional Dependencies
 
-- **pip2pi** – for `--build-index` (PyPI index building)
+- **pypiserver** – for `--serve` (offline private PyPI server)
   ```bash
-  pip install pip2pi
+  pip install pypiserver
+  # or install with the full extras:
+  pip install pypi-downloader[full]
   ```
 
 ## 🤝 Contributing

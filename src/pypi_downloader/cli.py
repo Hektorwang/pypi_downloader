@@ -27,6 +27,8 @@ from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 
+from pypi_downloader.resolver import DependencyResolver
+
 
 class RichLogSink:
     """使用 Rich Live 显示最后 N 行日志和进度条"""
@@ -1344,9 +1346,15 @@ def main() -> None:
         help="Use Chinese PyPI mirrors with automatic fallback (default: use official PyPI)",
     )
     parser.add_argument(
-        "--build-index",
+        "--serve",
         action="store_true",
-        help="Build PyPI-compatible index using dir2pi after downloading",
+        help="Start a pypiserver private PyPI server from the download directory after downloading",
+    )
+    parser.add_argument(
+        "--serve-port",
+        type=int,
+        default=8080,
+        help="Port for the pypiserver private PyPI server (default: 8080, only used with --serve)",
     )
     parser.add_argument(
         "--python-version",
@@ -1411,87 +1419,24 @@ def main() -> None:
     # Determine URL list path
     url_list_path = Path(args.url_list_path) if args.url_list_path else None
 
-    # Always resolve dependencies with pip-compile
-    logger.info("=" * 60)
-    logger.info("Resolving dependencies with pip-compile...")
-    logger.info("=" * 60)
-
-    logger.info(f"Input file: {requirements_path}")
-
     if args.all_versions:
         logger.info(
             "Note: --all-versions is enabled, version pins will be ignored during download"
         )
 
-    resolved_content = None  # Will store resolved dependencies in memory
-
+    # Resolve dependencies using DependencyResolver
+    resolver = DependencyResolver(
+        requirements_path=Path(requirements_path),
+        use_cn_mirrors=args.cn,
+    )
     try:
-        # Build pip-compile command (output to stdout using -o -)
-        pip_compile_cmd = [
-            "pip-compile",
-            str(requirements_path),
-            "-o",
-            "-",  # Output to stdout
-            "--no-header",
-            # No --verbose: reduce output noise
-        ]
-
-        # Add index URL if using CN mirrors
-        if args.cn:
-            # Use first CN mirror for dependency resolution
-            mirror_url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-            logger.info(f"Using Chinese mirror for resolution: {mirror_url}")
-            pip_compile_cmd.extend(["-i", mirror_url])
-        else:
-            logger.info("Using official PyPI for dependency resolution")
-
-        logger.info(f"Running command: {' '.join(pip_compile_cmd)}")
-        logger.info("This may take a while depending on the number of packages...")
-
-        result = subprocess.run(
-            pip_compile_cmd, capture_output=True, text=True, check=True
-        )
-
-        # Store resolved content in memory
-        resolved_content = result.stdout
-
-        # Log pip-compile stderr (errors/warnings) only
-        if result.stderr:
-            logger.debug("pip-compile stderr:")
-            for line in result.stderr.strip().split("\n"):
-                logger.debug(f"  {line}")
-
-        # Count resolved packages
-        resolved_lines = [
-            line
-            for line in resolved_content.splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-
-        logger.info("=" * 60)
-        logger.info(f"✔ Dependencies resolved successfully!")
-        logger.info(f"✔ Resolved {len(resolved_lines)} packages in memory")
-        if args.all_versions:
-            logger.info("✔ Will download all Python 3 versions of resolved packages")
-        logger.info("=" * 60)
-
-    except FileNotFoundError:
-        logger.error("=" * 60)
-        logger.error("❌ pip-compile command not found!")
-        logger.error("Please install pip-tools: pip install pip-tools")
-        logger.error("=" * 60)
-        return
-    except subprocess.CalledProcessError as e:
-        logger.error("=" * 60)
-        logger.error("❌ Failed to resolve dependencies!")
-        logger.error(f"Error: {e.stderr}")
-        logger.error("=" * 60)
+        resolved_content: str = resolver.resolve()
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        logger.error(f"Dependency resolution failed: {exc}")
         return
     # pylint: disable=W0718 # Catching too general exception Exception
-    except Exception as e:
-        logger.error("=" * 60)
-        logger.error(f"❌ Unexpected error resolving dependencies: {e}")
-        logger.error("=" * 60)
+    except Exception as exc:
+        logger.error(f"Unexpected error resolving dependencies: {exc}")
         return
 
     logger.info(f"Packages will be downloaded to: {download_dir.absolute()}")
@@ -1562,28 +1507,52 @@ def main() -> None:
 
     console.print(table)
 
-    # Build PyPI index if requested
-    if args.build_index and not args.dry_run:
-        logger.info("Building PyPI-compatible index with dir2pi...")
-        try:
-            result = subprocess.run(
-                ["dir2pi", str(download_dir)],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            logger.info(f"Index built successfully at {download_dir}/simple/")
-            if result.stdout:
-                logger.debug(result.stdout)
-        except FileNotFoundError:
-            logger.error(
-                "dir2pi command not found. Please install pip2pi: pip install pip2pi"
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to build index: {e.stderr}")
-        # pylint: disable=W0718 # Catching too general exception Exception
-        except Exception as e:
-            logger.error(f"Unexpected error building index: {e}")
+    # Start pypiserver if requested
+    if args.serve and not args.dry_run:
+        _start_pypi_server(download_dir=download_dir, port=args.serve_port)
+
+
+def _start_pypi_server(download_dir: Path, port: int) -> None:
+    """
+    Start a pypiserver instance serving packages from download_dir.
+
+    Blocks until the user interrupts with Ctrl+C.
+
+    Args:
+        download_dir: Directory containing the downloaded packages.
+        port: TCP port to listen on.
+    """
+    logger.info("=" * 60)
+    logger.info(f"Starting pypiserver on port {port}...")
+    logger.info(f"Serving packages from: {download_dir.absolute()}")
+    logger.info(f"Use with pip: pip install --index-url http://localhost:{port}/simple/ <package>")
+    logger.info("Press Ctrl+C to stop the server.")
+    logger.info("=" * 60)
+
+    cmd: List[str] = [
+        sys.executable,
+        "-m",
+        "pypiserver",
+        "run",
+        "--port",
+        str(port),
+        str(download_dir.absolute()),
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except FileNotFoundError:
+        logger.error(
+            "pypiserver module not found. "
+            "Please install it: pip install pypiserver"
+        )
+    except KeyboardInterrupt:
+        logger.info("pypiserver stopped.")
+    except subprocess.CalledProcessError as exc:
+        logger.error(f"pypiserver exited with error: {exc}")
+    # pylint: disable=W0718 # Catching too general exception Exception
+    except Exception as exc:
+        logger.error(f"Unexpected error starting pypiserver: {exc}")
 
 
 if __name__ == "__main__":

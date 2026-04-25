@@ -1,6 +1,70 @@
 # Release Notes
 
-## v0.6.2 (2026-02-19)
+## Version=0.8.0
+
+## v0.8.0 (2026-04-26)
+
+### 🎉 New Features
+
+#### Automatic Dependency Resolution (Always On)
+
+- **pip-compile is now always used**: Dependencies are always resolved via `pip-compile` before downloading. The old `--resolve-deps` flag has been removed — resolution is no longer optional.
+- **`DependencyResolver` class** (`src/pypi_downloader/resolver.py`): All pip-compile logic is encapsulated in a dedicated class, keeping `cli.py` clean.
+  - Accepts `requirements_path`, `use_cn_mirrors`, and optional `extra_args`.
+  - Returns resolved requirements as an in-memory string (no temporary files written to disk).
+  - Uses `sys.executable -m piptools compile` to ensure the correct environment's pip-tools is used.
+- **`--cn` applies to resolution too**: When `--cn` is set, pip-compile uses the Tsinghua mirror for resolution, ensuring consistent mirror usage across both resolution and download phases.
+
+#### Private PyPI Server (`--serve` / `--serve-port`)
+
+- **`--serve`**: After downloading, automatically starts a `pypiserver` private PyPI server serving packages from the download directory. Blocks until Ctrl+C.
+- **`--serve-port PORT`**: TCP port for the server (default: `8080`). Only used with `--serve`.
+- **Replaces `--build-index`**: `pypiserver` generates the package index at runtime — no pre-build step required.
+
+**Usage:**
+
+```bash
+# Download and immediately serve
+pypi-downloader -r requirements.txt --cn --serve
+
+# Custom port
+pypi-downloader -r requirements.txt --cn --serve --serve-port 9090
+
+# Install from the private server
+pip install --index-url http://localhost:8080/simple/ numpy
+```
+
+### 🔄 Breaking Changes
+
+- **Removed `--resolve-deps` flag**: Dependency resolution is now always performed automatically. Remove `--resolve-deps` from any existing scripts.
+- **Removed `--build-index` flag** and `pip2pi`/`dir2pi` dependency: Use `--serve` instead.
+
+### 📦 Dependency Changes
+
+- **Removed** optional dependency: `pip2pi>=0.8.0`
+- **Added** optional dependency: `pypiserver>=2.0.0`
+  - Install with: `pip install pypi-downloader[full]` or `pip install pypiserver`
+- **Added** core dependency: `pip-tools>=7.0.0` (required for automatic dependency resolution)
+- **Added** core dependency: `packaging>=21.0` (for PEP 440 compliant version comparison)
+
+### 🔑 License Compatibility
+
+All dependencies use permissive licenses compatible with MIT:
+
+| Package | License |
+|---|---|
+| `aiohttp` | Apache-2.0 AND MIT |
+| `loguru` | MIT |
+| `rich` | MIT |
+| `pip-tools` (pip-compile) | BSD-3-Clause |
+| `packaging` | Apache-2.0 OR BSD-2-Clause |
+| `pypiserver` | MIT AND Zlib |
+
+The project license remains **MIT**.
+
+---
+
+## v0.7.0 (2026-02-20)
 
 ### 🔧 Improvements
 
