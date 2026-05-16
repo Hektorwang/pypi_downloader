@@ -33,6 +33,37 @@ This is a documentation-only release. No functional code changes were made.
 - Documented the two-phase execution model (metadata fetch + download).
 - Documented the hybrid async/thread architecture.
 
+### Bug Fix: Fatal Local I/O Errors No Longer Cause Infinite Retry
+
+- **Root cause**: `dest_path.write_bytes()` raises `OSError` when the disk is full (errno 28 `ENOSPC`) or quota is exceeded (errno 122 `EDQUOT`). This was caught by the broad `except Exception` handler inside the retry loop, which treated it as a network error and retried with the next mirror — pointlessly.
+- **Fix**: Introduced a two-level exception hierarchy and a module-level constant for fatal errno codes.
+
+#### Exception hierarchy
+
+```python
+class LocalIOFatalError(Exception):
+    """Base: any local I/O error that makes mirror retries pointless."""
+
+class DiskFullError(LocalIOFatalError):
+    """Concrete: ENOSPC / EDQUOT (kept for backward compatibility)."""
+```
+
+#### Fatal errno constant
+
+```python
+_FATAL_LOCAL_ERRNO: frozenset = frozenset({
+    errno.ENOSPC,   # No space left on device
+    errno.EDQUOT,   # Disk quota exceeded
+    errno.EROFS,    # Read-only file system
+})
+```
+
+Adding a new fatal condition in the future requires only one line in `_FATAL_LOCAL_ERRNO` — no changes to exception-handling logic.
+
+- **Propagation**: `process_package` re-raises `LocalIOFatalError` before the broad handler. `run()` catches it, logs a `CRITICAL` message with the errno code, and exits with code 1.
+- **Other OSErrors** (e.g. permission denied on a single file) are not fatal — they log an error and skip that file, allowing the rest of the download to continue.
+- **User experience**: The tool stops immediately with a clear message: `"Download aborted due to a fatal local filesystem error (errno N): ... Fix the local filesystem issue and re-run — already-downloaded files will be skipped automatically."`
+
 ### No Breaking Changes
 
 All command-line options and behavior are identical to v0.8.0.

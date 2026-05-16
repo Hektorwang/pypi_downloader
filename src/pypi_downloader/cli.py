@@ -5,6 +5,7 @@ with automatic fallback mechanism when mirrors fail.
 
 import argparse
 import asyncio
+import errno
 import hashlib
 import json
 import random
@@ -28,6 +29,39 @@ from rich.table import Table
 from rich.text import Text
 
 from pypi_downloader.resolver import DependencyResolver
+
+
+class LocalIOFatalError(Exception):
+    """Raised when a local I/O error makes further retries pointless.
+
+    Retrying with a different mirror cannot resolve local storage or
+    filesystem problems. Subclass this to represent specific conditions.
+
+    Attributes:
+        errno_code: The OS errno value that triggered this error, if available.
+    """
+
+    def __init__(self, message: str, errno_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.errno_code = errno_code
+
+
+class DiskFullError(LocalIOFatalError):
+    """Raised when the disk is full or a disk quota is exceeded (ENOSPC / EDQUOT).
+
+    Kept as a concrete subclass of LocalIOFatalError for backward compatibility
+    and to allow callers to catch disk-full specifically if needed.
+    """
+
+
+# errno codes that indicate a fatal local filesystem condition.
+# Retrying with a different mirror cannot fix these.
+# Add new codes here to extend coverage without touching exception-handling logic.
+_FATAL_LOCAL_ERRNO: frozenset = frozenset({
+    errno.ENOSPC,   # No space left on device
+    errno.EDQUOT,   # Disk quota exceeded
+    errno.EROFS,    # Read-only file system
+})
 
 
 class RichLogSink:
@@ -944,13 +978,41 @@ class PackageDownloader:
                             return False
 
                     # Ensure directory exists (async)
-                    await loop.run_in_executor(
-                        None,
-                        lambda: self.download_dir.mkdir(parents=True, exist_ok=True),
-                    )
+                    try:
+                        await loop.run_in_executor(
+                            None,
+                            lambda: self.download_dir.mkdir(parents=True, exist_ok=True),
+                        )
+                    except OSError as exc:
+                        if exc.errno in _FATAL_LOCAL_ERRNO:
+                            logger.critical(
+                                f"Fatal local I/O error creating {self.download_dir} "
+                                f"(errno {exc.errno}): {exc}"
+                            )
+                            self._current_mirror_idx = original_mirror_idx
+                            raise DiskFullError(str(exc), errno_code=exc.errno) from exc
+                        logger.error(
+                            f"Cannot create download directory {self.download_dir}: {exc}"
+                        )
+                        self._current_mirror_idx = original_mirror_idx
+                        return False
 
                     # Write the downloaded content to file (async)
-                    await loop.run_in_executor(None, dest_path.write_bytes, content)
+                    try:
+                        await loop.run_in_executor(None, dest_path.write_bytes, content)
+                    except OSError as exc:
+                        if exc.errno in _FATAL_LOCAL_ERRNO:
+                            logger.critical(
+                                f"Fatal local I/O error writing {filename} "
+                                f"(errno {exc.errno}): {exc}. "
+                                f"Fix the local filesystem issue and re-run — "
+                                f"already-downloaded files will be skipped automatically."
+                            )
+                            self._current_mirror_idx = original_mirror_idx
+                            raise DiskFullError(str(exc), errno_code=exc.errno) from exc
+                        logger.error(f"Failed to write {filename} to disk: {exc}")
+                        self._current_mirror_idx = original_mirror_idx
+                        return False
 
                     logger.info(f"Downloaded: {filename}")
                     self._update_progress(1)  # Update progress for successful download
@@ -1155,6 +1217,10 @@ class PackageDownloader:
                 else:
                     package_status["status"] = "Failed"
                     package_status["details"] = "No files downloaded"
+            except LocalIOFatalError:
+                # Re-raise immediately — local filesystem errors cannot be
+                # resolved by retrying with a different mirror.
+                raise
             # pylint: disable=W0718 # Catching too general exception Exception
             except Exception as e:
                 logger.exception(
@@ -1238,9 +1304,19 @@ class PackageDownloader:
 
             # Phase 2: Download files
             logger.info("Phase 2: Downloading files...")
-            all_package_results: List[Dict[str, Any]] = await asyncio.gather(
-                *(self.process_package(line) for line in valid_lines)
-            )
+            try:
+                all_package_results: List[Dict[str, Any]] = await asyncio.gather(
+                    *(self.process_package(line) for line in valid_lines)
+                )
+            except LocalIOFatalError as exc:
+                logger.critical(
+                    f"Download aborted due to a fatal local filesystem error "
+                    f"(errno {exc.errno_code}): {exc}. "
+                    f"Fix the local filesystem issue and re-run — "
+                    f"already-downloaded files will be skipped automatically."
+                )
+                self._close_progress_bar()
+                raise SystemExit(1) from exc
 
             # Close progress bar
             self._close_progress_bar()
