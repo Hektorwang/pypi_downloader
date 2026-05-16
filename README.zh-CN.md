@@ -1,10 +1,10 @@
 # PyPI Downloader
 
-一个快速的异步 Python CLI 工具，用于**从 PyPI 镜像下载软件包**。
+一个快速的异步 Python CLI 工具，用于从 PyPI 镜像下载软件包并作为私有离线索引提供服务。
 
-## 🎯 用途
+## 用途
 
-本工具专为**在隔离网络或受限网络环境中搭建内部 PyPI 镜像**而设计。
+本工具专为在隔离网络或受限网络环境中搭建内部 PyPI 镜像而设计。
 
 ### 使用场景
 
@@ -14,48 +14,52 @@
 - 不同处理器架构（x86_64、ARM 等）
 - 多种操作系统（Linux、Windows、macOS）
 
-**痛点**：每次需要 PyPI 包时，希望一次性下载所有版本、所有架构及其依赖，然后部署到内部 PyPI 服务器，让所有开发者按需安装。
+痛点：每次需要 PyPI 包时，希望一次性下载所有版本、所有架构及其依赖，然后部署到内部 PyPI 服务器，让所有开发者按需安装。
 
-**解决方案**：本工具自动解析依赖、下载指定包的所有 Python 3 兼容版本和 wheel 文件，构建可供 pip 使用的离线镜像，随时可部署到内网。
+解决方案：本工具通过 `pip-compile` 自动解析依赖，下载所有 Python 3 兼容版本和 wheel 文件，并可立即启动 `pypiserver` 实例供 `pip install` 使用。
 
 ### 核心优势
 
-- ✅ **一次下载**：单次运行获取所有版本和平台的包
-- ✅ **异构支持**：适用于混合 Python 版本和架构的团队
-- ✅ **依赖解析**：自动包含所有传递依赖
-- ✅ **生产可用**：SHA-256 校验 + 重试逻辑 + 镜像自动切换
-- ✅ **智能缓存**：校验已有文件的哈希值，匹配则跳过下载（重复运行速度提升 100 倍）
-- ✅ **高性能**：异步并发下载（默认 16 路）+ 线程池处理 I/O（不阻塞事件循环）
-- ✅ **内存优化**：分块哈希计算、非阻塞文件 I/O、高效内存使用
-- ✅ **国内友好**：内置 14 个国内镜像源支持
-- ✅ **镜像兼容**：使用 pip User-Agent，避免被 PyPI 镜像拦截
+- 一次下载：单次运行获取所有版本和平台的包
+- 异构支持：适用于混合 Python 版本和架构的团队
+- 依赖解析：通过 `pip-compile` 自动包含所有传递依赖
+- 生产可用：SHA-256 校验 + 重试逻辑 + 镜像自动切换
+- 智能缓存：校验已有文件的哈希值，匹配则跳过下载（重复运行速度提升 100 倍）
+- 高性能：异步并发下载（默认 16 路）+ 线程池处理文件 I/O
+- 国内友好：内置 14 个国内镜像源支持
+- 镜像兼容：使用 pip User-Agent，避免被 PyPI 镜像拦截
 
 ---
 
-## ✨ 功能亮点
+## 功能亮点
 
-- **全版本下载** — 使用 `--all-versions` 下载每个包的所有 Python 3 版本
-- **最新补丁模式** — 使用 `--latest-patch` 只下载每个次版本的最新补丁版本（减少 60-70% 文件量）
-- **多镜像自动切换** — 某个镜像失败时自动切换到下一个（14 个国内镜像 + 官方 PyPI）
-- **异步并发** — 数百个文件并行下载，不阻塞（默认 16 路，可配置）
-- **哈希校验** — 使用 PyPI API 哈希值对每个文件进行 SHA-256 完整性校验
-- **智能跳过** — 校验已有文件哈希，有效则跳过下载（重复运行速度提升 100 倍）
-- **非阻塞 I/O** — 文件操作使用线程池，不阻塞事件循环
-- **自动依赖解析** — 始终使用 `pip-compile` 解析所有传递依赖（无需额外参数）
-- **平台过滤** — 只下载指定 Python 版本、ABI 或平台的 wheel 文件
-- **预演模式** — 下载前预览 URL 列表（自动保存到文件）
-- **私有 PyPI 服务器** — 下载完成后使用 `--serve` 启动离线 `pypiserver` 实例
-- **仅 Python 3** — 自动忽略 Python 2 专属包
-- **镜像友好** — 使用 pip User-Agent，避免被镜像拦截
+- 全版本下载：使用 `--all-versions` 下载每个包的所有 Python 3 版本
+- 最新补丁模式：使用 `--latest-patch` 只下载每个次版本的最新补丁版本（减少 60-70% 文件量）
+- 多镜像自动切换：某个镜像失败时自动切换到下一个（14 个国内镜像 + 官方 PyPI）
+- 异步并发：数百个文件并行下载，不阻塞（默认 16 路，可配置）
+- 哈希校验：使用 PyPI API 哈希值对每个文件进行 SHA-256 完整性校验
+- 智能跳过：校验已有文件哈希，有效则跳过下载
+- 非阻塞 I/O：文件操作使用线程池，不阻塞事件循环
+- 自动依赖解析：始终使用 `pip-compile` 解析所有传递依赖
+- 平台过滤：只下载指定 Python 版本、ABI 或平台的 wheel 文件
+- 预演模式：下载前预览 URL 列表（自动保存到文件）
+- 私有 PyPI 服务器：下载完成后使用 `--serve` 启动离线 `pypiserver` 实例
+- 仅 Python 3：自动忽略 Python 2 专属包
 
 ---
 
-## 📦 安装
+## 安装
 
-### 从 PyPI 安装（即将上线）
+### 从 PyPI 安装
 
 ```bash
 pip install pypi-downloader
+```
+
+### 包含可选 pypiserver 支持（用于 --serve）
+
+```bash
+pip install pypi-downloader[full]
 ```
 
 ### 从源码安装
@@ -69,7 +73,7 @@ pip install dist/*.whl
 
 ---
 
-## 🚀 快速开始
+## 快速开始
 
 下载当前目录 `requirements.txt` 中列出的所有包：
 
@@ -88,7 +92,7 @@ pypi-downloader requirements.txt \
 
 ---
 
-## 🛠 用法
+## 用法
 
 ```text
 usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
@@ -98,7 +102,9 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
                        [--url-list-path PATH]
                        [requirements]
 
-异步 PyPI 镜像下载器
+PyPI Package Downloader v0.8.1 - 用于构建离线 PyPI 镜像的异步下载器。
+依赖始终通过 pip-compile 自动解析（需要安装 pip-tools）。
+使用 --serve 可在下载完成后启动 pypiserver 私有索引。
 
 位置参数:
   requirements          requirements.txt 文件路径
@@ -120,77 +126,59 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
   --all-versions        下载每个包所有可用的 Python 3 版本
   --latest-patch        只下载每个次版本的最新补丁版本，与 --all-versions 互斥
   --url-list-path PATH  URL 列表文件的自定义路径（默认：./url_list.txt，仅在预演模式下使用）
+
+示例:
+  pypi-downloader                                  # 使用 ./requirements.txt
+  pypi-downloader -r reqs.txt --cn                 # 使用国内镜像
+  pypi-downloader -r reqs.txt --all-versions --cn  # 下载所有 Python 3 版本
+  pypi-downloader -r reqs.txt --latest-patch --cn  # 每个次版本只保留最新补丁
+  pypi-downloader -r reqs.txt --cn --serve         # 下载后启动私有服务器
+  pypi-downloader -r reqs.txt --dry-run            # 仅预览 URL
 ```
 
-> **说明：** 依赖始终通过 `pip-compile` 自动解析（需要安装 `pip-tools`），无需额外参数。
-
-### 运行输出示例
-
-```
-2026-04-26 12:34:56 | INFO | Packages will be downloaded to: /home/user/pypi
-2026-04-26 12:34:57 | INFO | Downloaded: numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.whl
-...
-```
-
-**下载汇总表：**
-
-| 包名   | 版本   | 状态         | 详情                    |
-|--------|--------|--------------|-------------------------|
-| numpy  | 1.26.4 | Synchronized | All 1 file(s) processed |
-| pandas | 2.2.2  | Synchronized | All 1 file(s) processed |
-| torch  | 2.3.0  | Failed       | All mirrors failed: 404 |
+说明：依赖始终通过 `pip-compile` 自动解析（需要安装 `pip-tools`）。
 
 ---
 
-## 📋 进阶示例
+## 进阶示例
 
 ### 下载全部版本（构建内部 PyPI 镜像）
 
 适合构建包含所有 Python 3 版本的内部 PyPI 镜像：
 
 ```bash
-# 下载 requirements.txt 中所有包的全部版本
-# 依赖由 pip-compile 自动解析
+# 解析所有依赖，下载所有 Python 3 版本，然后启动服务
 pypi-downloader -r requirements.txt --all-versions --cn --serve
 
 # 执行流程：
-# 1. 使用 pip-compile 解析所有依赖
+# 1. pip-compile 解析所有传递依赖
 # 2. 下载所有 Python 3 兼容版本，例如：
 #    numpy: 1.19.0, 1.19.1, ..., 1.26.4（全部版本）
 #    pandas: 1.0.0, 1.0.1, ..., 2.2.2（全部版本）
 # 3. 下载完成后在 8080 端口启动 pypiserver
 ```
 
-**适用场景**：内网中有不同 Python 3 版本（3.8、3.9、3.11）和架构（x86_64、ARM）的机器，此命令下载所有 wheel 文件，任意机器均可按需安装。
+适用场景：内网中有不同 Python 3 版本（3.8、3.9、3.11）和架构（x86_64、ARM）的机器，此命令下载所有 wheel 文件，任意机器均可按需安装。
 
 ### 最新补丁模式（精简镜像）
 
 只下载每个次版本的最新补丁版本，减少 60-70% 的文件量：
 
 ```bash
-# 只下载最新补丁：保留 2.1.9（跳过 2.1.3、2.1.5），保留 2.2.8（跳过 2.2.2）
+# 只保留 2.1.9（跳过 2.1.3、2.1.5），只保留 2.2.8（跳过 2.2.2）
 pypi-downloader -r requirements.txt --latest-patch --cn --serve
 
 # 文件量对比示例：
-# 使用 --all-versions：numpy 1.19.0, 1.19.1, 1.19.2, ..., 1.26.4（100+ 个版本）
-# 使用 --latest-patch：numpy 1.19.5, 1.20.3, 1.21.6, 1.22.4, ..., 1.26.4（约 20 个版本）
+# --all-versions：numpy 1.19.0, 1.19.1, 1.19.2, ..., 1.26.4（100+ 个版本）
+# --latest-patch：numpy 1.19.5, 1.20.3, 1.21.6, 1.22.4, ..., 1.26.4（约 20 个版本）
 ```
 
-**优势：**
+优势：
 - 减少 60-70% 的下载文件数
 - 下载更快，占用存储更少
 - 保持兼容性（补丁版本应向后兼容）
 
-**适合使用的场景：**
-- 存储或带宽有限时构建内部镜像
-- 信任语义化版本规范（补丁版本 = 仅修复 bug）
-- 大多数生产环境场景
-
-**不适合使用的场景：**
-- 需要特定补丁版本来规避某个 bug
-- 包不严格遵循语义化版本规范
-
-> **注意：** `--latest-patch` 与 `--all-versions` 互斥，不能同时使用。
+注意：`--latest-patch` 与 `--all-versions` 互斥，不能同时使用。
 
 ### 预演模式（预览 URL）
 
@@ -204,7 +192,7 @@ pypi-downloader -r requirements.txt --dry-run --cn
 pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
 ```
 
-**使用场景：**
+使用场景：
 - 下载前审查将要获取的内容
 - 配合其他下载工具使用（wget、aria2c 等）
 - 保留包 URL 记录备查
@@ -266,40 +254,53 @@ pip install --index-url http://localhost:8080/simple/ numpy
 使用国内镜像加速下载：
 
 ```bash
-# 依赖解析和下载均使用国内镜像
 pypi-downloader -r requirements.txt --cn
 ```
 
-支持的镜像源：
-- 阿里云、腾讯云、清华大学、中科大、北京外国语大学、上海交通大学、南京大学等
-- 某个镜像失败时自动切换备用镜像
+支持的镜像源（共 14 个，启动时随机排序）：
+- 阿里云、腾讯云、清华大学、中科大、北京外国语大学、上海交通大学、南京大学、南阳理工、北京大学、齐鲁工业大学、浙江大学、南京工业大学、吉林大学、东软
+- 官方 PyPI 始终作为最后的备用镜像
 
 ---
 
-## 🔧 环境要求
+## 环境要求
 
 - Python 3.11+
-- `aiohttp`、`loguru`、`rich`（随包自动安装）
-- `pip-tools`（自动依赖解析所必需）
+- `aiohttp`、`loguru`、`rich`、`pip-tools`、`packaging`（随包自动安装）
 
 ### 可选依赖
 
-- **pypiserver** — 用于 `--serve`（离线私有 PyPI 服务器）
+- `pypiserver`：用于 `--serve`（离线私有 PyPI 服务器）
 
-  ```bash
-  pip install pypiserver
-  # 或通过 full extras 安装：
-  pip install pypi-downloader[full]
-  ```
-
----
-
-## 🤝 贡献
-
-欢迎提交 Pull Request！重大变更请先开 Issue 讨论你的想法。
+```bash
+pip install pypiserver
+# 或通过 full extras 安装：
+pip install pypi-downloader[full]
+```
 
 ---
 
-## 📄 许可证
+## 架构说明
 
-MIT © [Hektorwang]
+工具采用两阶段执行模型：
+
+1. 元数据阶段：从 PyPI API 获取包元数据并统计待下载文件总数
+2. 下载阶段：并发下载所有文件并实时显示进度
+
+内部使用混合异步/线程架构：
+- asyncio 处理网络 I/O（默认 16 路并发下载）
+- ThreadPoolExecutor 处理文件 I/O 和哈希计算（最多 CPU_COUNT * 4 个线程，上限 32）
+
+这种组合在不阻塞事件循环的前提下最大化 I/O 密集型工作负载的吞吐量。
+
+---
+
+## 贡献
+
+欢迎提交 Pull Request。重大变更请先开 Issue 讨论你的想法。
+
+---
+
+## 许可证
+
+MIT (c) Hektorwang

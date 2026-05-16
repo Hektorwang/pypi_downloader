@@ -1308,7 +1308,24 @@ def main() -> None:
     # Start with simple console logging for initial setup
     configure_logging(use_rich=False)
 
-    parser = argparse.ArgumentParser(description="PyPI Package Downloader")
+    parser = argparse.ArgumentParser(
+        description=(
+            "PyPI Package Downloader v0.8.1 - "
+            "Async downloader for building offline PyPI mirrors. "
+            "Dependencies are always resolved automatically via pip-compile (pip-tools required). "
+            "Use --serve to start a pypiserver private index after downloading."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  pypi-downloader                                  # use ./requirements.txt\n"
+            "  pypi-downloader -r reqs.txt --cn                 # Chinese mirrors\n"
+            "  pypi-downloader -r reqs.txt --all-versions --cn  # all Python 3 versions\n"
+            "  pypi-downloader -r reqs.txt --latest-patch --cn  # latest patch per minor\n"
+            "  pypi-downloader -r reqs.txt --cn --serve         # download then serve\n"
+            "  pypi-downloader -r reqs.txt --dry-run            # preview URLs only\n"
+        ),
+    )
     parser.add_argument(
         "requirements",
         type=str,

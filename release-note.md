@@ -1,6 +1,43 @@
 # Release Notes
 
-## Version=0.8.0
+## Version=0.8.1
+
+## v0.8.1 (2026-05-16)
+
+### Documentation and CLI Revision
+
+This is a documentation-only release. No functional code changes were made.
+
+#### Removed Stale dir2pi / pip2pi References
+
+- Cleaned up all historical references to `dir2pi` and `pip2pi` in documentation.
+- These tools were removed in v0.8.0. The release notes now accurately reflect the current state.
+- `pypiserver` is the sole mechanism for serving a local package index.
+
+#### Updated CLI Help Text
+
+- `argparse` description now includes the version number, a one-line summary, and a set of usage examples shown with `--help`.
+- Removed misleading references to removed flags (`--resolve-deps`, `--build-index`).
+
+#### Updated README.md and README.zh-CN.md
+
+- Corrected installation section (removed stale `git clone` + `uv build` block from the PyPI install path).
+- Removed all `--resolve-deps` and `--build-index` examples.
+- Clarified that `pypiserver` (not `dir2pi`) is used for serving the local index.
+- Added explicit note that `pip-tools` is a required core dependency.
+- Synchronized English and Chinese README content.
+
+#### Updated docs/SPEC.md (PRD)
+
+- Added pypi-downloader-specific constraints to the technical specification.
+- Documented the two-phase execution model (metadata fetch + download).
+- Documented the hybrid async/thread architecture.
+
+### No Breaking Changes
+
+All command-line options and behavior are identical to v0.8.0.
+
+---
 
 ## v0.8.0 (2026-04-26)
 
