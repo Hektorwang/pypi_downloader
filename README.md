@@ -43,7 +43,7 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 - Automatic dependency resolution: always uses `pip-compile` to resolve all transitive dependencies
 - Platform filtering: download only wheels for specific Python version, ABI, or platform
 - Dry-run mode: preview URLs before downloading (automatically saves URL list)
-- Private PyPI server: start an offline `pypiserver` instance with `--serve` after downloading
+- Ready for pypiserver: downloaded packages can be served immediately with pypiserver
 - Python 3 only: automatically ignores Python 2 packages
 
 ---
@@ -56,10 +56,10 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 pip install pypi-downloader
 ```
 
-### With optional pypiserver support (for --serve)
+### With pypiserver support (for serving packages)
 
 ```bash
-pip install pypi-downloader[full]
+pip install pypiserver
 ```
 
 ### From source

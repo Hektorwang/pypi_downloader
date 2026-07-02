@@ -1388,8 +1388,7 @@ def main() -> None:
         description=(
             "PyPI Package Downloader v0.8.1 - "
             "Async downloader for building offline PyPI mirrors. "
-            "Dependencies are always resolved automatically via pip-compile (pip-tools required). "
-            "Use --serve to start a pypiserver private index after downloading."
+            "Dependencies are always resolved automatically via pip-compile (pip-tools required)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -1398,7 +1397,6 @@ def main() -> None:
             "  pypi-downloader -r reqs.txt --cn                 # Chinese mirrors\n"
             "  pypi-downloader -r reqs.txt --all-versions --cn  # all Python 3 versions\n"
             "  pypi-downloader -r reqs.txt --latest-patch --cn  # latest patch per minor\n"
-            "  pypi-downloader -r reqs.txt --cn --serve         # download then serve\n"
             "  pypi-downloader -r reqs.txt --dry-run            # preview URLs only\n"
         ),
     )
@@ -1437,17 +1435,6 @@ def main() -> None:
         "--cn",
         action="store_true",
         help="Use Chinese PyPI mirrors with automatic fallback (default: use official PyPI)",
-    )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Start a pypiserver private PyPI server from the download directory after downloading",
-    )
-    parser.add_argument(
-        "--serve-port",
-        type=int,
-        default=8080,
-        help="Port for the pypiserver private PyPI server (default: 8080, only used with --serve)",
     )
     parser.add_argument(
         "--python-version",
@@ -1599,53 +1586,6 @@ def main() -> None:
         table.add_row(package, version, f"[{status_style}]{status}[/]", details)
 
     console.print(table)
-
-    # Start pypiserver if requested
-    if args.serve and not args.dry_run:
-        _start_pypi_server(download_dir=download_dir, port=args.serve_port)
-
-
-def _start_pypi_server(download_dir: Path, port: int) -> None:
-    """
-    Start a pypiserver instance serving packages from download_dir.
-
-    Blocks until the user interrupts with Ctrl+C.
-
-    Args:
-        download_dir: Directory containing the downloaded packages.
-        port: TCP port to listen on.
-    """
-    logger.info("=" * 60)
-    logger.info(f"Starting pypiserver on port {port}...")
-    logger.info(f"Serving packages from: {download_dir.absolute()}")
-    logger.info(f"Use with pip: pip install --index-url http://localhost:{port}/simple/ <package>")
-    logger.info("Press Ctrl+C to stop the server.")
-    logger.info("=" * 60)
-
-    cmd: List[str] = [
-        sys.executable,
-        "-m",
-        "pypiserver",
-        "run",
-        "--port",
-        str(port),
-        str(download_dir.absolute()),
-    ]
-
-    try:
-        subprocess.run(cmd, check=True)
-    except FileNotFoundError:
-        logger.error(
-            "pypiserver module not found. "
-            "Please install it: pip install pypiserver"
-        )
-    except KeyboardInterrupt:
-        logger.info("pypiserver stopped.")
-    except subprocess.CalledProcessError as exc:
-        logger.error(f"pypiserver exited with error: {exc}")
-    # pylint: disable=W0718 # Catching too general exception Exception
-    except Exception as exc:
-        logger.error(f"Unexpected error starting pypiserver: {exc}")
 
 
 if __name__ == "__main__":
