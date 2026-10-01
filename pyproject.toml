@@ -1,13 +1,13 @@
 [project]
 name = "pypi-downloader"
-version = "0.9.0"
+version = "0.10.0"
 description = "Async PyPI package downloader with mirror fallback, automatic dependency resolution, and platform filtering"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.11",
     "loguru>=0.6",
     "rich>=12.0",
-    "pip-tools>=7.0.0",
+    "uv>=0.12,<0.13",
     "packaging>=21.0",
 ]
 license = {text = "MIT"}
@@ -44,6 +44,9 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: tests that hit the real network through uv (deselected with -m 'not integration')",
+]
 
 [tool.ruff]
 line-length = 100

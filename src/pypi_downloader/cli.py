@@ -33,7 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             f"PyPI Package Downloader v{__version__} - "
             "Async downloader for building offline PyPI mirrors. "
-            "Dependencies are always resolved automatically via pip-compile (pip-tools required)."
+            "Dependencies are always resolved automatically via uv "
+            "(universal mode: one pin covering Windows / macOS / Linux)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(

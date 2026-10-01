@@ -1,6 +1,34 @@
 # Release Notes
 
-## Version=0.9.0
+## Version=0.10.0
+
+## v0.10.0 (2026-10-02)
+
+### Dependency Resolution Backend Switched to uv
+
+#### Changed
+
+- The resolver now uses `uv pip compile --universal` (invoked via `python -m uv`,
+  so the binary always matches the declared dependency) instead of pip-tools'
+  pip-compile. Universal resolution produces one pin covering Windows / macOS /
+  Linux in a single run: platform-specific dependencies are emitted with
+  environment markers and downloaded too, removing the biggest known
+  limitation. Verified live: resolving `tqdm` on Linux now pins `colorama`
+  with `sys_platform == 'win32'`.
+- `pip-tools` removed from dependencies; `uv>=0.12,<0.13` added (uv's version
+  policy ships breaking changes in minor releases, so the range is bounded).
+
+#### Migration Notes
+
+- Resolved versions may differ from pip-compile's output for the same input.
+- uv does not read pip.conf on the build machine; the index is always passed
+  explicitly (official PyPI by default, Tsinghua with `--cn`). Previously a
+  machine-level pip.conf could influence resolution in non-cn mode.
+- Universal resolution is stricter than per-platform resolution; if a
+  dependency graph cannot be satisfied, run the tool once per target platform
+  instead (already-verified files are skipped automatically).
+- End users are unaffected: artifacts are ordinary wheels and sdists; any
+  install tool (pip included) consumes the mirror exactly as before.
 
 ## v0.9.0 (2026-10-02)
 

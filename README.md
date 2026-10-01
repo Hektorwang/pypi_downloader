@@ -22,7 +22,7 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 
 - One-time download: get all versions and platforms in a single run
 - Heterogeneous support: works for teams with mixed Python versions and architectures
-- Dependency resolution: automatically includes all transitive dependencies via `pip-compile`
+- Dependency resolution: automatically includes all transitive dependencies via uv (universal resolution covers Windows / macOS / Linux in one pin)
 - Production-ready: SHA-256 verification with PyPI API hashes, retry logic, and mirror fallback
 - Smart caching: verifies existing files and skips re-download if hash matches (100x faster on re-runs)
 - Memory-safe streaming: files stream to disk in 1 MiB chunks and are renamed atomically (GB-sized wheels never load into memory)
@@ -42,7 +42,7 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 - Hash verification: SHA-256 integrity check using PyPI API hashes for every file
 - Smart skip: verifies existing files with hash, skips re-download if valid
 - Non-blocking I/O: uses thread pool for file operations, never blocks the event loop
-- Automatic dependency resolution: always uses `pip-compile` to resolve all transitive dependencies
+- Automatic dependency resolution: always uses uv (universal mode) to resolve all transitive dependencies
 - Platform filtering: download only wheels for specific Python version, ABI, or platform
 - Dry-run mode: preview URLs before downloading (saves the canonical PyPI URL list)
 - Python 3 only: automatically ignores Python 2 packages
@@ -98,7 +98,7 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
                        [--version]
                        [requirements]
 
-PyPI Package Downloader v0.9.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via pip-compile (pip-tools required).
+PyPI Package Downloader v0.10.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
 
 positional arguments:
   requirements          Path to the requirements.txt file
@@ -139,7 +139,7 @@ Examples:
   pypi-downloader -r reqs.txt --dry-run            # preview URLs only
 ```
 
-Note: dependencies are always resolved automatically using `pip-compile` (requires `pip-tools`).
+Note: dependencies are always resolved automatically using uv in universal mode (one pin covering Windows / macOS / Linux).
 
 ---
 
@@ -264,7 +264,7 @@ Supported mirror sources (5 total; official PyPI is always tried last as a fallb
 
 ### Known Limitations
 
-- **Cross-platform dependency resolution**: `pip-compile` resolves dependencies for the interpreter and platform it runs on. Platform-specific dependencies guarded by environment markers (e.g. `colorama; sys_platform == "win32"`) are only pinned when you run the tool on that platform. If your mirror must serve mixed operating systems, run the tool once per target platform (each run skips files already downloaded and verified). `--all-versions` covers the version dimension but not the platform dimension.
+- **Universal resolution strictness**: dependencies are resolved with `uv pip compile --universal`, producing one pin that covers Windows / macOS / Linux (platform-specific dependencies are emitted with environment markers and downloaded too — resolving `tqdm` on Linux pins `colorama` with `sys_platform == 'win32'`). Universal resolution is stricter than per-platform resolution; for the rare dependency graph it cannot satisfy, run the tool once per target platform instead (each run skips files already downloaded and verified).
 - **Metadata source**: with `--cn`, package metadata (versions, hashes) is fetched from the Chinese mirrors first — most of them proxy the PyPI JSON API (the endpoint path follows each mirror's file layout; verified for Aliyun, Tencent Cloud, Volcengine, CERNET and the university mirrors behind it). Mirrors without the endpoint (Huawei Cloud) are skipped automatically. The official PyPI JSON API remains the final authority and fallback, so "package not found" is still detected correctly and networks where only the mirrors are reachable keep working.
 
 ---
@@ -272,7 +272,7 @@ Supported mirror sources (5 total; official PyPI is always tried last as a fallb
 ## Requirements
 
 - Python 3.11+
-- `aiohttp`, `loguru`, `rich`, `pip-tools`, `packaging` (installed automatically)
+- `aiohttp`, `loguru`, `rich`, `uv`, `packaging` (installed automatically)
 - `pypiserver` or any static file server if you want to serve the download directory as an index (external, not required by this tool)
 
 ---

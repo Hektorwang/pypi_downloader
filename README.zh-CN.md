@@ -22,7 +22,7 @@
 
 - 一次下载：单次运行获取所有版本和平台的包
 - 异构支持：适用于混合 Python 版本和架构的团队
-- 依赖解析：通过 `pip-compile` 自动包含所有传递依赖
+- 依赖解析：通过 uv 自动包含所有传递依赖（universal 模式一份 pin 覆盖 Windows / macOS / Linux）
 - 生产可用：SHA-256 校验 + 重试逻辑 + 镜像自动切换
 - 智能缓存：校验已有文件的哈希值，匹配则跳过下载（重复运行速度提升 100 倍）
 - 流式下载：文件以 1 MiB 分块流式写盘并原子重命名（GB 级 wheel 不会占满内存）
@@ -42,7 +42,7 @@
 - 哈希校验：使用 PyPI API 哈希值对每个文件进行 SHA-256 完整性校验
 - 智能跳过：校验已有文件哈希，有效则跳过下载
 - 非阻塞 I/O：文件操作使用线程池，不阻塞事件循环
-- 自动依赖解析：始终使用 `pip-compile` 解析所有传递依赖
+- 自动依赖解析：始终使用 uv（universal 模式）解析所有传递依赖
 - 平台过滤：只下载指定 Python 版本、ABI 或平台的 wheel 文件
 - 预演模式：下载前预览 URL 列表（保存的是 PyPI 官方原始 URL）
 - 仅 Python 3：自动忽略 Python 2 专属包
@@ -98,7 +98,7 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
                        [--version]
                        [requirements]
 
-PyPI Package Downloader v0.9.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via pip-compile (pip-tools required).
+PyPI Package Downloader v0.10.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
 
 位置参数:
   requirements          requirements.txt 文件路径
@@ -133,7 +133,7 @@ PyPI Package Downloader v0.9.0 - Async downloader for building offline PyPI mirr
   pypi-downloader -r reqs.txt --dry-run            # 仅预览 URL
 ```
 
-说明：依赖始终通过 `pip-compile` 自动解析（需要安装 `pip-tools`）。
+说明：依赖始终通过 uv 以 universal 模式自动解析（一份 pin 覆盖 Windows / macOS / Linux）。
 
 ---
 
@@ -258,7 +258,7 @@ pypi-downloader -r requirements.txt --cn
 
 ### 已知局限
 
-- **跨平台依赖解析**：`pip-compile` 只按运行本工具的解释器与平台解析依赖。受环境标记保护的特定平台依赖（如 `colorama; sys_platform == "win32"`）只有在本工具运行于该平台时才会被固定下来。如果镜像库需要服务多种操作系统，请在每个目标平台上各运行一次本工具（已下载并校验通过的文件会自动跳过）。`--all-versions` 覆盖版本维度，但覆盖不了平台维度。
+- **全平台解析更严格**：依赖通过 `uv pip compile --universal` 解析，一份 pin 同时覆盖 Windows / macOS / Linux（特定平台的依赖会带环境标记输出并同样被下载——在 Linux 上解析 `tqdm` 会把 `colorama` 以 `sys_platform == 'win32'` 标记固定下来）。universal 解析比单平台解析更严格；极少数依赖图无法满足时，改为在每个目标平台上各运行一次本工具（已下载并校验通过的文件会自动跳过）。
 - **元数据来源**：使用 `--cn` 时，包元数据（版本、哈希）优先从国内镜像获取——多数镜像代理了 PyPI JSON API（端点路径与该镜像的文件布局一致；实测阿里云、腾讯云、火山引擎、教育网联合镜像站及其背后高校源均支持）。不支持该端点的镜像（华为云）会被自动跳过。官方 PyPI JSON API 仍作为最终裁决与兜底，因此"包不存在"依然能被准确判定，仅镜像可达的内网环境也能正常工作。
 
 ---
@@ -266,7 +266,7 @@ pypi-downloader -r requirements.txt --cn
 ## 环境要求
 
 - Python 3.11+
-- `aiohttp`、`loguru`、`rich`、`pip-tools`、`packaging`（随包自动安装）
+- `aiohttp`、`loguru`、`rich`、`uv`、`packaging`（随包自动安装）
 - 如需把下载目录作为索引对外服务，可自备 `pypiserver` 或任意静态文件服务器（外部工具，本工具不依赖）
 
 ---
