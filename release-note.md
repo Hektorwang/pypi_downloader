@@ -1,6 +1,94 @@
 # Release Notes
 
-## Version=0.8.1
+## Version=0.9.0
+
+## v0.9.0 (2026-10-02)
+
+### Major Reliability and Architecture Overhaul
+
+This release fixes the defects found in a full quality review, splits the
+monolithic module, and adds tests, tooling, and CI.
+
+#### Fixed
+
+- Metadata fetching stays mirror-first — the original scheme was viable (most
+  CN mirrors do proxy the PyPI JSON API) — but it is now hardened: correct
+  single-slash URLs (the old code emitted `web/json//pkg`, which only worked
+  by server-side tolerance), HTTP status checks so non-serving mirrors are
+  skipped quietly, per-run caching, and concurrent phase-1 fetches (previously
+  sequential). The JSON endpoint path is derived from each mirror's file
+  layout (`web/json/` for TUNA-style mirrors, `json/` for plain-layout ones;
+  verified live: aliyun, cernet, tencent, volces serve JSON, huawei does not).
+  The official PyPI JSON API remains the final authority and fallback: a 404
+  there cleanly reports "package not found" instead of "all mirrors failed",
+  and networks where only the mirrors are reachable keep working.
+- Mirror fallback actually switches URLs now: the canonical
+  `files.pythonhosted.org` URL is rewritten to the mirror on every attempt
+  instead of being frozen at collection time against a shared mutable index.
+- Downloads stream to disk in 1 MiB chunks with on-the-fly SHA-256 and an
+  atomic `.part` rename, instead of buffering whole files (previously GB-sized
+  wheels loaded fully into memory with unbounded per-package concurrency).
+  Concurrency is now bounded per file, matching the documented stream count.
+- Python 2 filtering now also rejects `cp2x`-only wheels (previously only
+  `py2x` tags were caught).
+- URL rewriting uses pure POSIX path logic; the old implementation went through
+  the local filesystem (`Path.resolve()`), which would produce backslash URLs
+  on Windows.
+- HTTP 404 on metadata is reported as "package not found" instead of cycling
+  every mirror and misreporting "all mirrors failed".
+- Plain-HTTP aliyun mirror replaced with HTTPS across the board.
+- Exit codes are meaningful: 0 success, 1 failure (including any package
+  "Failed" / "Partial Sync"), 130 on Ctrl+C. The Rich live display is always
+  stopped via try/finally; `--help` no longer creates a log file.
+
+#### Changed
+
+- Built-in CN mirror list refreshed after live verification: Aliyun, Tencent
+  Cloud, Huawei Cloud, Volcengine (ByteDance), and the CERNET education network
+  joint mirror (a MirrorZ aggregator that auto-redirects to participating
+  university mirrors). Individual university mirrors were removed as redundant,
+  and dead mirrors (Baidu, Qiniu, Douban, 163, ISCAS) were dropped.
+- Per-mirror file layout support: TUNA-style `web/packages/` (aliyun, cernet,
+  custom mirrors) vs plain `packages/` (tencent, huawei, volces), selected via
+  a lookup table.
+- Huawei Cloud is pinned as the primary download mirror: all file downloads
+  start there (freshest sync of the vendors). It does not proxy the PyPI JSON
+  API, so metadata is served by the other mirrors or the official fallback;
+  a successful metadata fetch deliberately does not move the download anchor.
+- New `--mirror URL` option (repeatable) for custom mirrors, tried before the
+  built-in list; dry-run URL lists now contain canonical, deterministic
+  `files.pythonhosted.org` URLs.
+- New `--version` flag; the version string is single-sourced from package
+  metadata instead of being hardcoded in the help text.
+- resolver: canonical Tsinghua index URL, pip-compile subprocess timeout
+  (default 1800s), environment markers in requirement lines are stripped.
+
+#### Removed
+
+- All remaining `--serve` / pypiserver documentation (the feature itself was
+  removed in v0.8.2's predecessor commit) and the unused `full` extra from
+  pyproject.
+
+#### Added
+
+- Module split: `downloader.py` (core), `ui.py` (Rich display), `resolver.py`,
+  `cli.py` (entry point unchanged: `pypi_downloader.cli:main`). Every function
+  carries a Google-style docstring.
+- Test suite: 47 tests (unit + integration against a local aiohttp server),
+  ruff and mypy configurations, and a GitHub Actions CI workflow
+  (Python 3.11 / 3.12 / 3.13).
+- "Known Limitations" section in both READMEs documenting the pip-compile
+  cross-platform resolution constraint and the mirror-first metadata policy.
+
+## v0.8.2 (2026-10-01)
+
+### New Mirror Source
+
+#### Added CERNET Education Network Joint Mirror
+
+- Added `https://mirrors.cernet.edu.cn/pypi` (the CERNET education network joint mirror, a MirrorZ-based aggregator) to the Chinese mirror list, bringing the total to 15 CN mirrors plus official PyPI as the last-resort fallback.
+- Verified compatibility before adding: the mirror serves the standard `/pypi/web/packages/` file layout used by `rewrite_url`, and its simple index redirects to participating university mirrors (Tsinghua TUNA, USTC, etc.). A test download through the rewritten URL succeeded with a matching SHA-256 hash.
+- Updated mirror counts and mirror lists in both README.md and README.zh-CN.md.
 
 ## v0.8.1 (2026-05-16)
 

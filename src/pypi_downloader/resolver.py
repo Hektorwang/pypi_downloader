@@ -1,57 +1,65 @@
-"""
-resolver.py - Dependency resolution module using pip-compile.
+"""Dependency resolution module using pip-compile.
 
 Encapsulates all pip-compile interactions for resolving transitive
 dependencies from a requirements file.
+
+Note: pip-compile resolves for the *current* interpreter and platform, so
+dependencies guarded by environment markers that do not match the host (e.g.
+Windows-only packages resolved on Linux) are absent from the pin. See the
+"Known Limitations" section of the README.
 """
 
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 from loguru import logger
 
 
 class DependencyResolver:
-    """
-    Resolves Python package dependencies using pip-compile.
+    """Resolve Python package dependencies using pip-compile.
 
-    Wraps pip-compile (from pip-tools) to produce a fully-pinned,
-    transitive dependency list from a loose requirements file.
-    The resolved output is returned as an in-memory string to avoid
-    unnecessary file system writes.
+    Wraps pip-compile (from pip-tools) to produce a fully-pinned, transitive
+    dependency list from a loose requirements file. The resolved output is
+    returned as an in-memory string to avoid unnecessary file system writes.
     """
 
     DEFAULT_INDEX_URL: str = "https://pypi.org/simple"
-    CN_INDEX_URL: str = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+    DEFAULT_TIMEOUT_SECONDS: float = 1800.0
+    CN_INDEX_URL: str = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
     def __init__(
         self,
         requirements_path: Path,
         use_cn_mirrors: bool = False,
-        extra_args: Optional[List[str]] = None,
+        extra_args: list[str] | None = None,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         """
         Initialize the DependencyResolver.
 
         Args:
             requirements_path: Path to the input requirements file.
-            use_cn_mirrors: If True, use a Chinese mirror for resolution.
+            use_cn_mirrors: If True, use the canonical Tsinghua mirror for resolution.
             extra_args: Additional arguments forwarded verbatim to pip-compile.
+            timeout_seconds: Maximum wall-clock time for the pip-compile run.
         """
-        self.requirements_path: Path = requirements_path
-        self.use_cn_mirrors: bool = use_cn_mirrors
-        self.extra_args: List[str] = extra_args or []
+        self.requirements_path = requirements_path
+        self.use_cn_mirrors = use_cn_mirrors
+        self.extra_args: list[str] = extra_args or []
+        self.timeout_seconds = timeout_seconds
 
-    def _build_command(self) -> List[str]:
-        """
-        Build the pip-compile command list.
+    def _build_command(self) -> list[str]:
+        """Build the pip-compile command list.
+
+        Runs pip-compile via ``python -m piptools`` with the current
+        interpreter, writes the pin to stdout, and appends the configured
+        index URL plus any user-provided extra arguments.
 
         Returns:
-            List of command tokens ready for subprocess.
+            List of command tokens ready for :func:`subprocess.run`.
         """
-        cmd: List[str] = [
+        cmd: list[str] = [
             sys.executable,
             "-m",
             "piptools",
@@ -72,16 +80,12 @@ class DependencyResolver:
         return cmd
 
     def resolve(self) -> str:
-        """
-        Run pip-compile and return the resolved requirements as a string.
+        """Run pip-compile and return the resolved requirements as a string.
 
         Raises:
-            FileNotFoundError: If pip-compile / pip-tools is not installed.
+            FileNotFoundError: If pip-tools is not installed.
             subprocess.CalledProcessError: If pip-compile exits with a non-zero code.
-            RuntimeError: For any other unexpected failure.
-
-        Returns:
-            Resolved requirements content as a multi-line string.
+            RuntimeError: If pip-compile exceeds the timeout.
         """
         cmd = self._build_command()
 
@@ -98,20 +102,25 @@ class DependencyResolver:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=self.timeout_seconds,
             )
         except FileNotFoundError as exc:
-            logger.error("=" * 60)
             logger.error("pip-compile command not found!")
             logger.error("Please install pip-tools: pip install pip-tools")
-            logger.error("=" * 60)
             raise FileNotFoundError(
                 "pip-compile not found. Install pip-tools: pip install pip-tools"
             ) from exc
+        except subprocess.TimeoutExpired as exc:
+            logger.error(
+                f"pip-compile timed out after {self.timeout_seconds}s; "
+                "increase the timeout or reduce the input size."
+            )
+            raise RuntimeError(
+                f"pip-compile timed out after {self.timeout_seconds}s"
+            ) from exc
         except subprocess.CalledProcessError as exc:
-            logger.error("=" * 60)
             logger.error("Failed to resolve dependencies!")
             logger.error(f"Error: {exc.stderr}")
-            logger.error("=" * 60)
             raise
 
         resolved_content: str = result.stdout
@@ -121,7 +130,7 @@ class DependencyResolver:
             for line in result.stderr.strip().splitlines():
                 logger.debug(f"  pip-compile: {line}")
 
-        resolved_lines: List[str] = [
+        resolved_lines = [
             line
             for line in resolved_content.splitlines()
             if line.strip() and not line.strip().startswith("#")

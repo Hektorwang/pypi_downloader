@@ -1,6 +1,6 @@
 # PyPI Downloader
 
-A fast, asynchronous Python CLI tool to download packages from PyPI mirrors and serve them as a private offline index.
+A fast, asynchronous Python CLI tool to download packages from PyPI mirrors for building offline package sets.
 
 ## Purpose
 
@@ -16,7 +16,7 @@ Your development environment is in an internal network without direct internet a
 
 The challenge: when you need a PyPI package, you want to download it once with all its versions, architectures, and dependencies, then deploy to your internal PyPI server so all developers can install what they need.
 
-The solution: this tool resolves dependencies automatically, downloads all Python 3 compatible versions and wheels, and can immediately start a `pypiserver` instance ready for `pip install`.
+The solution: this tool resolves dependencies automatically, downloads all Python 3 compatible versions and wheels into a single directory that any static file server or PyPI index server can serve.
 
 ### Key Benefits
 
@@ -25,8 +25,9 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 - Dependency resolution: automatically includes all transitive dependencies via `pip-compile`
 - Production-ready: SHA-256 verification with PyPI API hashes, retry logic, and mirror fallback
 - Smart caching: verifies existing files and skips re-download if hash matches (100x faster on re-runs)
+- Memory-safe streaming: files stream to disk in 1 MiB chunks and are renamed atomically (GB-sized wheels never load into memory)
 - Fast: async concurrent downloads (16 streams by default) + thread pool for file I/O
-- China-friendly: built-in support for 14 Chinese mirrors
+- China-friendly: built-in support for 5 Chinese mirror sources (Aliyun, Tencent Cloud, Huawei Cloud, Volcengine, CERNET)
 - Mirror-safe: uses pip User-Agent to avoid being blocked by PyPI mirrors
 
 ---
@@ -35,15 +36,15 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 
 - All versions download: download all Python 3 versions of each package with `--all-versions`
 - Latest patch mode: download only the latest patch version for each minor version with `--latest-patch` (60-70% fewer files)
-- Multi-mirror fallback: retries the next mirror automatically if one fails (14 Chinese mirrors + official PyPI)
+- Multi-mirror fallback: retries the next mirror automatically if one fails (5 Chinese mirror sources + official PyPI)
+- Custom mirrors: bring your own mirror with the repeatable `--mirror` option (tried before the built-in list)
 - Async and concurrent: hundreds of files in parallel without blocking (default: 16 streams, configurable)
 - Hash verification: SHA-256 integrity check using PyPI API hashes for every file
 - Smart skip: verifies existing files with hash, skips re-download if valid
 - Non-blocking I/O: uses thread pool for file operations, never blocks the event loop
 - Automatic dependency resolution: always uses `pip-compile` to resolve all transitive dependencies
 - Platform filtering: download only wheels for specific Python version, ABI, or platform
-- Dry-run mode: preview URLs before downloading (automatically saves URL list)
-- Ready for pypiserver: downloaded packages can be served immediately with pypiserver
+- Dry-run mode: preview URLs before downloading (saves the canonical PyPI URL list)
 - Python 3 only: automatically ignores Python 2 packages
 
 ---
@@ -54,12 +55,6 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 
 ```bash
 pip install pypi-downloader
-```
-
-### With pypiserver support (for serving packages)
-
-```bash
-pip install pypiserver
 ```
 
 ### From source
@@ -95,47 +90,52 @@ pypi-downloader requirements.txt \
 ## Usage
 
 ```text
-usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
-                       [--download-dir DIR] [--cn] [--serve] [--serve-port PORT]
-                       [--python-version PYTHON_VERSION] [--abi ABI]
-                       [--platform PLATFORM] [--all-versions] [--latest-patch]
-                       [--url-list-path PATH]
+usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
+                       [--concurrency CONCURRENCY] [--download-dir DOWNLOAD_DIR]
+                       [--cn] [--mirror URL] [--python-version PYTHON_VERSION]
+                       [--abi ABI] [--platform PLATFORM] [--all-versions]
+                       [--latest-patch] [--url-list-path URL_LIST_PATH]
+                       [--version]
                        [requirements]
 
-PyPI Package Downloader v0.8.1 - Async downloader for building offline PyPI mirrors.
-Dependencies are always resolved automatically via pip-compile (pip-tools required).
-Use --serve to start a pypiserver private index after downloading.
+PyPI Package Downloader v0.9.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via pip-compile (pip-tools required).
 
 positional arguments:
-  requirements          Path to requirements.txt file
+  requirements          Path to the requirements.txt file
 
 options:
   -h, --help            show this help message and exit
   -r, --requirement REQUIREMENT_FILE
-                        Path to requirements.txt (pip-style)
+                        Path to the requirements.txt file (alternative to
+                        positional argument)
   --dry-run             Only collect URLs and save to file, do not download
-  --concurrency N       Max concurrent downloads (default: 16)
-  --download-dir DIR    Folder to save packages (default: ./pypi)
+  --concurrency CONCURRENCY
+                        Max concurrent downloads (default: 16)
+  --download-dir DOWNLOAD_DIR
+                        Folder to save packages (default: ./pypi)
   --cn                  Use Chinese PyPI mirrors with automatic fallback
-  --serve               Start a pypiserver private PyPI server from the
-                        download directory after downloading
-  --serve-port PORT     Port for the pypiserver (default: 8080, only used with --serve)
+  --mirror URL          Custom mirror base URL, tried before the built-in list
+                        (repeatable, e.g. https://mirror.example.com/pypi)
   --python-version PYTHON_VERSION
                         Filter by Python version tag (e.g., cp311, py3, py2.py3)
   --abi ABI             Filter by ABI tag (e.g., cp311, abi3, none)
-  --platform PLATFORM   Filter by platform tag (e.g., manylinux_2_17_x86_64, win_amd64, any)
-  --all-versions        Download all available Python 3 versions of each package
-  --latest-patch        Download only the latest patch version for each minor version.
-                        Mutually exclusive with --all-versions
-  --url-list-path PATH  Custom path for URL list file (default: ./url_list.txt,
-                        only used in dry-run mode)
+  --platform PLATFORM   Filter by platform tag (e.g., manylinux_2_17_x86_64,
+                        win_amd64, any)
+  --all-versions        Download all available Python 3 versions of each
+                        package (ignores version pins)
+  --latest-patch        Download only the latest patch version for each minor
+                        version (mutually exclusive with --all-versions)
+  --url-list-path URL_LIST_PATH
+                        Custom path for URL list file (default: ./url_list.txt,
+                        dry-run mode only)
+  --version             show program's version number and exit
 
 Examples:
   pypi-downloader                                  # use ./requirements.txt
   pypi-downloader -r reqs.txt --cn                 # Chinese mirrors
   pypi-downloader -r reqs.txt --all-versions --cn  # all Python 3 versions
   pypi-downloader -r reqs.txt --latest-patch --cn  # latest patch per minor
-  pypi-downloader -r reqs.txt --cn --serve         # download then serve
+  pypi-downloader -r reqs.txt --mirror https://mirror.example.com/pypi
   pypi-downloader -r reqs.txt --dry-run            # preview URLs only
 ```
 
@@ -150,15 +150,15 @@ Note: dependencies are always resolved automatically using `pip-compile` (requir
 Perfect for building an internal PyPI mirror with all Python 3 versions:
 
 ```bash
-# Resolve all dependencies, download ALL Python 3 versions, then serve
-pypi-downloader -r requirements.txt --all-versions --cn --serve
+# Resolve all dependencies, download ALL Python 3 versions
+pypi-downloader -r requirements.txt --all-versions --cn
 
 # What happens:
 # 1. pip-compile resolves all transitive dependencies
 # 2. Downloads ALL Python 3 compatible versions, for example:
 #    numpy: 1.19.0, 1.19.1, ..., 1.26.4 (all versions)
 #    pandas: 1.0.0, 1.0.1, ..., 2.2.2 (all versions)
-# 3. Starts pypiserver on port 8080 after downloading
+# 3. Packages land in ./pypi, ready for your internal index
 ```
 
 Use case: your internal network has machines with different Python 3 versions (3.8, 3.9, 3.11) and architectures (x86_64, ARM). This command downloads all wheels so any machine can install what it needs.
@@ -169,7 +169,7 @@ Download only the latest patch version for each minor version (60-70% fewer file
 
 ```bash
 # Keep 2.1.9 (not 2.1.3, 2.1.5), keep 2.2.8 (not 2.2.2)
-pypi-downloader -r requirements.txt --latest-patch --cn --serve
+pypi-downloader -r requirements.txt --latest-patch --cn
 
 # Example reduction:
 # --all-versions: numpy 1.19.0, 1.19.1, 1.19.2, ..., 1.26.4 (100+ versions)
@@ -194,6 +194,8 @@ pypi-downloader -r requirements.txt --dry-run --cn
 # Save to custom location
 pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
 ```
+
+The saved list contains the canonical `files.pythonhosted.org` URLs — deterministic across runs and directly usable with other download tools (wget, aria2c).
 
 Use cases:
 - Audit what will be downloaded before actual download
@@ -222,31 +224,23 @@ pypi-downloader -r requirements.txt \
   --platform any
 ```
 
-### Build Self-Hosted PyPI Mirror
+### Custom Download Directory and Mirrors
 
-Download packages and start a private PyPI server:
+Download to a specific directory, optionally through your own mirror:
 
 ```bash
-# Download packages (dependencies are automatically resolved via pip-compile)
+# Download packages to /var/www/pypi (dependencies resolved automatically)
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
   --cn
 
-# Download and immediately start the private PyPI server on port 8080 (default)
+# Try a corporate mirror first, then fall back to the built-in list
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
-  --cn \
-  --serve
-
-# Use a custom port
-pypi-downloader -r requirements.txt \
-  --download-dir /var/www/pypi \
-  --cn \
-  --serve \
-  --serve-port 9090
+  --mirror https://mirror.example.com/pypi
 ```
 
-Then install packages from the private server:
+Point any static file server or PyPI index server at the download directory and install packages from it:
 
 ```bash
 pip install --index-url http://localhost:8080/simple/ numpy
@@ -260,9 +254,18 @@ Use Chinese mirrors for faster downloads in China:
 pypi-downloader -r requirements.txt --cn
 ```
 
-Supported mirrors (14 total, randomized at startup):
-- Aliyun, Tencent Cloud, Tsinghua, USTC, BFSU, SJTU, NJU, NYIST, PKU, QLU, ZJU, NJTech, JLU, Neusoft
-- Official PyPI is always tried last as a fallback
+Supported mirror sources (5 total; official PyPI is always tried last as a fallback):
+- Huawei Cloud, Aliyun, Tencent Cloud, CERNET (education network joint mirror), Volcengine
+- Huawei Cloud is the designated primary download mirror: package files always download from it first (freshest sync of the vendors). It does not proxy the PyPI JSON API, so metadata is served by the other mirrors or the official fallback.
+- The remaining mirrors are shuffled at startup to spread load
+- The CERNET source is a MirrorZ-based aggregator that auto-redirects to the participating university mirror (Tsinghua TUNA, USTC, SJTU, ...) closest to your network
+- Each mirror's file layout (with or without the `web/` path prefix) is handled automatically
+- Add your own mirror with `--mirror URL` (repeatable, tried before the built-in list)
+
+### Known Limitations
+
+- **Cross-platform dependency resolution**: `pip-compile` resolves dependencies for the interpreter and platform it runs on. Platform-specific dependencies guarded by environment markers (e.g. `colorama; sys_platform == "win32"`) are only pinned when you run the tool on that platform. If your mirror must serve mixed operating systems, run the tool once per target platform (each run skips files already downloaded and verified). `--all-versions` covers the version dimension but not the platform dimension.
+- **Metadata source**: with `--cn`, package metadata (versions, hashes) is fetched from the Chinese mirrors first — most of them proxy the PyPI JSON API (the endpoint path follows each mirror's file layout; verified for Aliyun, Tencent Cloud, Volcengine, CERNET and the university mirrors behind it). Mirrors without the endpoint (Huawei Cloud) are skipped automatically. The official PyPI JSON API remains the final authority and fallback, so "package not found" is still detected correctly and networks where only the mirrors are reachable keep working.
 
 ---
 
@@ -270,16 +273,7 @@ Supported mirrors (14 total, randomized at startup):
 
 - Python 3.11+
 - `aiohttp`, `loguru`, `rich`, `pip-tools`, `packaging` (installed automatically)
-
-### Optional Dependencies
-
-- `pypiserver` for `--serve` (offline private PyPI server)
-
-```bash
-pip install pypiserver
-# or install with the full extras:
-pip install pypi-downloader[full]
-```
+- `pypiserver` or any static file server if you want to serve the download directory as an index (external, not required by this tool)
 
 ---
 
@@ -287,10 +281,17 @@ pip install pypi-downloader[full]
 
 The tool uses a two-phase execution model:
 
-1. Metadata phase: fetch package metadata from PyPI API and count total files to download
-2. Download phase: download all files concurrently with progress tracking
+1. Metadata phase: fetch package metadata concurrently, mirror-first (mirrors proxying the PyPI JSON API serve it directly; the official API is the final authority and fallback, cached; a 404 from the official API fails fast as "package not found") and count total files to download
+2. Download phase: download all files concurrently; each attempt rewrites the canonical URL onto the mirror being tried, so switching mirrors always changes the URL actually fetched
+
+Downloads are robust by construction:
+
+- Content streams to a `.part` file in 1 MiB chunks (hash computed on the fly) and is renamed into place atomically after the SHA-256 check passes — interrupted downloads never leave half-written files behind
+- Files that already exist with a matching hash are skipped (idempotent re-runs)
+- Mirror switching advances a shared preferred-mirror pointer, so later files start from a mirror after one that failed
 
 Internally it uses a hybrid async/threaded architecture:
+
 - asyncio for network I/O (16 concurrent downloads by default)
 - ThreadPoolExecutor for file I/O and hash computation (CPU_COUNT * 4 threads, max 32)
 

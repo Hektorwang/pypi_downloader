@@ -11,3 +11,10 @@ wheels/
 
 /packages
 requirements.*
+# Tool caches and run artifacts
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+pypi-downloader.log
+url_list.txt
+pypi/

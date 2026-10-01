@@ -1,6 +1,6 @@
 # PyPI Downloader
 
-一个快速的异步 Python CLI 工具，用于从 PyPI 镜像下载软件包并作为私有离线索引提供服务。
+一个快速的异步 Python CLI 工具，用于从 PyPI 镜像下载软件包，构建离线包集。
 
 ## 用途
 
@@ -16,7 +16,7 @@
 
 痛点：每次需要 PyPI 包时，希望一次性下载所有版本、所有架构及其依赖，然后部署到内部 PyPI 服务器，让所有开发者按需安装。
 
-解决方案：本工具通过 `pip-compile` 自动解析依赖，下载所有 Python 3 兼容版本和 wheel 文件，并可立即启动 `pypiserver` 实例供 `pip install` 使用。
+解决方案：本工具通过 `pip-compile` 自动解析依赖，把所有 Python 3 兼容版本和 wheel 文件下载到一个目录中，任何静态文件服务器或 PyPI 索引服务器都可以直接对外提供该目录。
 
 ### 核心优势
 
@@ -25,8 +25,9 @@
 - 依赖解析：通过 `pip-compile` 自动包含所有传递依赖
 - 生产可用：SHA-256 校验 + 重试逻辑 + 镜像自动切换
 - 智能缓存：校验已有文件的哈希值，匹配则跳过下载（重复运行速度提升 100 倍）
+- 流式下载：文件以 1 MiB 分块流式写盘并原子重命名（GB 级 wheel 不会占满内存）
 - 高性能：异步并发下载（默认 16 路）+ 线程池处理文件 I/O
-- 国内友好：内置 14 个国内镜像源支持
+- 国内友好：内置 5 个国内镜像源（阿里云、腾讯云、华为云、火山引擎、教育网联合镜像站）
 - 镜像兼容：使用 pip User-Agent，避免被 PyPI 镜像拦截
 
 ---
@@ -35,15 +36,15 @@
 
 - 全版本下载：使用 `--all-versions` 下载每个包的所有 Python 3 版本
 - 最新补丁模式：使用 `--latest-patch` 只下载每个次版本的最新补丁版本（减少 60-70% 文件量）
-- 多镜像自动切换：某个镜像失败时自动切换到下一个（14 个国内镜像 + 官方 PyPI）
+- 多镜像自动切换：某个镜像失败时自动切换到下一个（5 个国内镜像源 + 官方 PyPI）
+- 自定义镜像：通过可重复的 `--mirror` 参数使用自己的镜像（优先于内置列表）
 - 异步并发：数百个文件并行下载，不阻塞（默认 16 路，可配置）
 - 哈希校验：使用 PyPI API 哈希值对每个文件进行 SHA-256 完整性校验
 - 智能跳过：校验已有文件哈希，有效则跳过下载
 - 非阻塞 I/O：文件操作使用线程池，不阻塞事件循环
 - 自动依赖解析：始终使用 `pip-compile` 解析所有传递依赖
 - 平台过滤：只下载指定 Python 版本、ABI 或平台的 wheel 文件
-- 预演模式：下载前预览 URL 列表（自动保存到文件）
-- 私有 PyPI 服务器：下载完成后使用 `--serve` 启动离线 `pypiserver` 实例
+- 预演模式：下载前预览 URL 列表（保存的是 PyPI 官方原始 URL）
 - 仅 Python 3：自动忽略 Python 2 专属包
 
 ---
@@ -54,12 +55,6 @@
 
 ```bash
 pip install pypi-downloader
-```
-
-### 包含可选 pypiserver 支持（用于 --serve）
-
-```bash
-pip install pypi-downloader[full]
 ```
 
 ### 从源码安装
@@ -95,16 +90,15 @@ pypi-downloader requirements.txt \
 ## 用法
 
 ```text
-usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run] [--concurrency N]
-                       [--download-dir DIR] [--cn] [--serve] [--serve-port PORT]
-                       [--python-version PYTHON_VERSION] [--abi ABI]
-                       [--platform PLATFORM] [--all-versions] [--latest-patch]
-                       [--url-list-path PATH]
+usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
+                       [--concurrency CONCURRENCY] [--download-dir DOWNLOAD_DIR]
+                       [--cn] [--mirror URL] [--python-version PYTHON_VERSION]
+                       [--abi ABI] [--platform PLATFORM] [--all-versions]
+                       [--latest-patch] [--url-list-path URL_LIST_PATH]
+                       [--version]
                        [requirements]
 
-PyPI Package Downloader v0.8.1 - 用于构建离线 PyPI 镜像的异步下载器。
-依赖始终通过 pip-compile 自动解析（需要安装 pip-tools）。
-使用 --serve 可在下载完成后启动 pypiserver 私有索引。
+PyPI Package Downloader v0.9.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via pip-compile (pip-tools required).
 
 位置参数:
   requirements          requirements.txt 文件路径
@@ -114,11 +108,13 @@ PyPI Package Downloader v0.8.1 - 用于构建离线 PyPI 镜像的异步下载�
   -r, --requirement REQUIREMENT_FILE
                         requirements.txt 路径（pip 格式）
   --dry-run             仅收集 URL 并保存到文件，不实际下载
-  --concurrency N       最大并发下载数（默认：16）
-  --download-dir DIR    包保存目录（默认：./pypi）
+  --concurrency CONCURRENCY
+                        最大并发下载数（默认：16）
+  --download-dir DOWNLOAD_DIR
+                        包保存目录（默认：./pypi）
   --cn                  使用国内 PyPI 镜像，自动切换备用镜像
-  --serve               下载完成后从下载目录启动 pypiserver 私有 PyPI 服务器
-  --serve-port PORT     pypiserver 端口（默认：8080，仅与 --serve 配合使用）
+  --mirror URL          自定义镜像基础 URL，优先于内置列表（可重复使用，
+                        例如 https://mirror.example.com/pypi）
   --python-version PYTHON_VERSION
                         按 Python 版本标签过滤（如 cp311、py3、py2.py3）
   --abi ABI             按 ABI 标签过滤（如 cp311、abi3、none）
@@ -126,13 +122,14 @@ PyPI Package Downloader v0.8.1 - 用于构建离线 PyPI 镜像的异步下载�
   --all-versions        下载每个包所有可用的 Python 3 版本
   --latest-patch        只下载每个次版本的最新补丁版本，与 --all-versions 互斥
   --url-list-path PATH  URL 列表文件的自定义路径（默认：./url_list.txt，仅在预演模式下使用）
+  --version             显示版本号并退出
 
 示例:
   pypi-downloader                                  # 使用 ./requirements.txt
   pypi-downloader -r reqs.txt --cn                 # 使用国内镜像
   pypi-downloader -r reqs.txt --all-versions --cn  # 下载所有 Python 3 版本
   pypi-downloader -r reqs.txt --latest-patch --cn  # 每个次版本只保留最新补丁
-  pypi-downloader -r reqs.txt --cn --serve         # 下载后启动私有服务器
+  pypi-downloader -r reqs.txt --mirror https://mirror.example.com/pypi
   pypi-downloader -r reqs.txt --dry-run            # 仅预览 URL
 ```
 
@@ -147,15 +144,15 @@ PyPI Package Downloader v0.8.1 - 用于构建离线 PyPI 镜像的异步下载�
 适合构建包含所有 Python 3 版本的内部 PyPI 镜像：
 
 ```bash
-# 解析所有依赖，下载所有 Python 3 版本，然后启动服务
-pypi-downloader -r requirements.txt --all-versions --cn --serve
+# 解析所有依赖，下载所有 Python 3 版本
+pypi-downloader -r requirements.txt --all-versions --cn
 
 # 执行流程：
 # 1. pip-compile 解析所有传递依赖
 # 2. 下载所有 Python 3 兼容版本，例如：
 #    numpy: 1.19.0, 1.19.1, ..., 1.26.4（全部版本）
 #    pandas: 1.0.0, 1.0.1, ..., 2.2.2（全部版本）
-# 3. 下载完成后在 8080 端口启动 pypiserver
+# 3. 包落在 ./pypi 目录，可直接供内部索引使用
 ```
 
 适用场景：内网中有不同 Python 3 版本（3.8、3.9、3.11）和架构（x86_64、ARM）的机器，此命令下载所有 wheel 文件，任意机器均可按需安装。
@@ -166,7 +163,7 @@ pypi-downloader -r requirements.txt --all-versions --cn --serve
 
 ```bash
 # 只保留 2.1.9（跳过 2.1.3、2.1.5），只保留 2.2.8（跳过 2.2.2）
-pypi-downloader -r requirements.txt --latest-patch --cn --serve
+pypi-downloader -r requirements.txt --latest-patch --cn
 
 # 文件量对比示例：
 # --all-versions：numpy 1.19.0, 1.19.1, 1.19.2, ..., 1.26.4（100+ 个版本）
@@ -191,6 +188,8 @@ pypi-downloader -r requirements.txt --dry-run --cn
 # 保存到自定义路径
 pypi-downloader -r requirements.txt --dry-run --url-list-path /path/to/urls.txt
 ```
+
+保存的是 `files.pythonhosted.org` 官方原始 URL——每次运行结果一致，可直接配合其他下载工具（wget、aria2c 等）使用。
 
 使用场景：
 - 下载前审查将要获取的内容
@@ -219,31 +218,23 @@ pypi-downloader -r requirements.txt \
   --platform any
 ```
 
-### 搭建自托管 PyPI 私有源
+### 自定义下载目录与镜像
 
-下载包并启动私有 PyPI 服务器：
+下载到指定目录，可选地经由自己的镜像：
 
 ```bash
-# 下载包（依赖由 pip-compile 自动解析）
+# 下载包到 /var/www/pypi（依赖由 pip-compile 自动解析）
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
   --cn
 
-# 下载完成后立即在 8080 端口（默认）启动私有 PyPI 服务器
+# 优先使用公司内部镜像，失败后再回落到内置列表
 pypi-downloader -r requirements.txt \
   --download-dir /var/www/pypi \
-  --cn \
-  --serve
-
-# 使用自定义端口
-pypi-downloader -r requirements.txt \
-  --download-dir /var/www/pypi \
-  --cn \
-  --serve \
-  --serve-port 9090
+  --mirror https://mirror.example.com/pypi
 ```
 
-从私有服务器安装包：
+将任意静态文件服务器或 PyPI 索引服务器指向下载目录即可安装包：
 
 ```bash
 pip install --index-url http://localhost:8080/simple/ numpy
@@ -257,9 +248,18 @@ pip install --index-url http://localhost:8080/simple/ numpy
 pypi-downloader -r requirements.txt --cn
 ```
 
-支持的镜像源（共 14 个，启动时随机排序）：
-- 阿里云、腾讯云、清华大学、中科大、北京外国语大学、上海交通大学、南京大学、南阳理工、北京大学、齐鲁工业大学、浙江大学、南京工业大学、吉林大学、东软
-- 官方 PyPI 始终作为最后的备用镜像
+支持的镜像源（共 5 个；官方 PyPI 始终作为最后的备用镜像）：
+- 华为云、阿里云、腾讯云、教育网联合镜像站（CERNET）、火山引擎
+- 华为云是指定的首选下载镜像：包文件始终最先从华为云下载（各商业源中同步最及时）。它不代理 PyPI JSON API，元数据由其余镜像或官方兜底提供。
+- 其余镜像在启动时随机排序以分散负载
+- 教育网联合镜像站是 MirrorZ 聚合入口，会自动跳转到离你网络最近的参与高校镜像（清华 TUNA、中科大、上交大等）
+- 各镜像的文件路径布局（是否带 `web/` 前缀）由工具自动适配
+- 通过 `--mirror URL` 添加自己的镜像（可重复，优先于内置列表）
+
+### 已知局限
+
+- **跨平台依赖解析**：`pip-compile` 只按运行本工具的解释器与平台解析依赖。受环境标记保护的特定平台依赖（如 `colorama; sys_platform == "win32"`）只有在本工具运行于该平台时才会被固定下来。如果镜像库需要服务多种操作系统，请在每个目标平台上各运行一次本工具（已下载并校验通过的文件会自动跳过）。`--all-versions` 覆盖版本维度，但覆盖不了平台维度。
+- **元数据来源**：使用 `--cn` 时，包元数据（版本、哈希）优先从国内镜像获取——多数镜像代理了 PyPI JSON API（端点路径与该镜像的文件布局一致；实测阿里云、腾讯云、火山引擎、教育网联合镜像站及其背后高校源均支持）。不支持该端点的镜像（华为云）会被自动跳过。官方 PyPI JSON API 仍作为最终裁决与兜底，因此"包不存在"依然能被准确判定，仅镜像可达的内网环境也能正常工作。
 
 ---
 
@@ -267,16 +267,7 @@ pypi-downloader -r requirements.txt --cn
 
 - Python 3.11+
 - `aiohttp`、`loguru`、`rich`、`pip-tools`、`packaging`（随包自动安装）
-
-### 可选依赖
-
-- `pypiserver`：用于 `--serve`（离线私有 PyPI 服务器）
-
-```bash
-pip install pypiserver
-# 或通过 full extras 安装：
-pip install pypi-downloader[full]
-```
+- 如需把下载目录作为索引对外服务，可自备 `pypiserver` 或任意静态文件服务器（外部工具，本工具不依赖）
 
 ---
 
@@ -284,8 +275,14 @@ pip install pypi-downloader[full]
 
 工具采用两阶段执行模型：
 
-1. 元数据阶段：从 PyPI API 获取包元数据并统计待下载文件总数
-2. 下载阶段：并发下载所有文件并实时显示进度
+1. 元数据阶段：并发获取包元数据（镜像优先——代理了 PyPI JSON API 的镜像直接提供服务，官方 API 作为最终裁决与兜底；带缓存；官方源 404 直接判定为"包不存在"）并统计待下载文件总数
+2. 下载阶段：并发下载所有文件；每次尝试都会把官方 URL 实时改写到当前正在使用的镜像，因此切换镜像必然切换实际下载的 URL
+
+下载链路天然健壮：
+
+- 内容以 1 MiB 分块流式写入 `.part` 临时文件（同时计算哈希），SHA-256 校验通过后原子重命名——中断的下载绝不会留下写了一半的文件
+- 已存在且哈希匹配的文件直接跳过（重复运行幂等）
+- 镜像切换只会单向推进共享的"首选镜像"指针，后续文件会从失败镜像之后开始尝试
 
 内部使用混合异步/线程架构：
 - asyncio 处理网络 I/O（默认 16 路并发下载）
