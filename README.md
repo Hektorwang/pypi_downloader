@@ -27,7 +27,7 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 - Smart caching: verifies existing files and skips re-download if hash matches (100x faster on re-runs)
 - Memory-safe streaming: files stream to disk in 1 MiB chunks and are renamed atomically (GB-sized wheels never load into memory)
 - Fast: async concurrent downloads (16 streams by default) + thread pool for file I/O
-- China-friendly: built-in support for 5 Chinese mirror sources (Aliyun, Tencent Cloud, Huawei Cloud, Volcengine, CERNET)
+- China-friendly: built-in support for 4 Chinese mirror sources (Aliyun, Tencent Cloud, Volcengine, CERNET)
 - Mirror-safe: uses pip User-Agent to avoid being blocked by PyPI mirrors
 
 ---
@@ -36,7 +36,7 @@ The solution: this tool resolves dependencies automatically, downloads all Pytho
 
 - All versions download: download all Python 3 versions of each package with `--all-versions`
 - Latest patch mode: download only the latest patch version for each minor version with `--latest-patch` (60-70% fewer files)
-- Multi-mirror fallback: retries the next mirror automatically if one fails (5 Chinese mirror sources + official PyPI)
+- Multi-mirror fallback: retries the next mirror automatically if one fails (4 Chinese mirror sources + official PyPI)
 - Custom mirrors: bring your own mirror with the repeatable `--mirror` option (tried before the built-in list)
 - Async and concurrent: hundreds of files in parallel without blocking (default: 16 streams, configurable)
 - Hash verification: SHA-256 integrity check using PyPI API hashes for every file
@@ -98,7 +98,7 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
                        [--version]
                        [requirements]
 
-PyPI Package Downloader v0.10.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
+PyPI Package Downloader v0.10.1 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
 
 positional arguments:
   requirements          Path to the requirements.txt file
@@ -254,10 +254,8 @@ Use Chinese mirrors for faster downloads in China:
 pypi-downloader -r requirements.txt --cn
 ```
 
-Supported mirror sources (5 total; official PyPI is always tried last as a fallback):
-- Huawei Cloud, Aliyun, Tencent Cloud, CERNET (education network joint mirror), Volcengine
-- Huawei Cloud is the designated primary download mirror: package files always download from it first (freshest sync of the vendors). It does not proxy the PyPI JSON API, so metadata is served by the other mirrors or the official fallback.
-- The remaining mirrors are shuffled at startup to spread load
+Supported mirror sources (4 total, randomized at startup; official PyPI is always tried last as a fallback):
+- Aliyun, Tencent Cloud, CERNET (education network joint mirror), Volcengine
 - The CERNET source is a MirrorZ-based aggregator that auto-redirects to the participating university mirror (Tsinghua TUNA, USTC, SJTU, ...) closest to your network
 - Each mirror's file layout (with or without the `web/` path prefix) is handled automatically
 - Add your own mirror with `--mirror URL` (repeatable, tried before the built-in list)
@@ -265,7 +263,7 @@ Supported mirror sources (5 total; official PyPI is always tried last as a fallb
 ### Known Limitations
 
 - **Universal resolution strictness**: dependencies are resolved with `uv pip compile --universal`, producing one pin that covers Windows / macOS / Linux (platform-specific dependencies are emitted with environment markers and downloaded too — resolving `tqdm` on Linux pins `colorama` with `sys_platform == 'win32'`). Universal resolution is stricter than per-platform resolution; for the rare dependency graph it cannot satisfy, run the tool once per target platform instead (each run skips files already downloaded and verified).
-- **Metadata source**: with `--cn`, package metadata (versions, hashes) is fetched from the Chinese mirrors first — most of them proxy the PyPI JSON API (the endpoint path follows each mirror's file layout; verified for Aliyun, Tencent Cloud, Volcengine, CERNET and the university mirrors behind it). Mirrors without the endpoint (Huawei Cloud) are skipped automatically. The official PyPI JSON API remains the final authority and fallback, so "package not found" is still detected correctly and networks where only the mirrors are reachable keep working.
+- **Metadata source**: with `--cn`, package metadata (versions, hashes) is fetched from the Chinese mirrors first — most of them proxy the PyPI JSON API (the endpoint path follows each mirror's file layout; verified for Aliyun, Tencent Cloud, Volcengine, CERNET and the university mirrors behind it). Mirrors without the endpoint are skipped automatically. The official PyPI JSON API remains the final authority and fallback, so "package not found" is still detected correctly and networks where only the mirrors are reachable keep working.
 
 ---
 

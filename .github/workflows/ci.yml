@@ -29,3 +29,5 @@ jobs:
 
       - name: Tests
         run: pytest -v
+        env:
+          PYPI_DOWNLOADER_INTEGRATION: "1"

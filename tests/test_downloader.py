@@ -180,9 +180,6 @@ class TestRewriteUrl:
             "https://mirrors.cloud.tencent.com/pypi": (
                 "https://mirrors.cloud.tencent.com/pypi/packages/"
             ),
-            "https://mirrors.huaweicloud.com/repository/pypi": (
-                "https://mirrors.huaweicloud.com/repository/pypi/packages/"
-            ),
             "https://mirrors.volces.com/pypi": "https://mirrors.volces.com/pypi/packages/",
         }
         for mirror, prefix in expected.items():
@@ -190,6 +187,17 @@ class TestRewriteUrl:
             rewritten = downloader.rewrite_url(self.OFFICIAL_URL)
             assert rewritten.startswith(prefix), mirror
             assert rewritten.endswith("pkg-1.0-py3-none-any.whl"), mirror
+
+    def test_rewrite_url_huawei_layout_when_passed_explicitly(self) -> None:
+        """Huawei Cloud left the built-in list but stays usable via --mirror."""
+        downloader = PackageDownloader(requirements_content="", use_cn_mirrors=True)
+        rewritten = downloader.rewrite_url(
+            self.OFFICIAL_URL, "https://mirrors.huaweicloud.com/repository/pypi"
+        )
+        assert rewritten == (
+            "https://mirrors.huaweicloud.com/repository/pypi/packages/"
+            "ab/cd/ef/pkg-1.0-py3-none-any.whl"
+        )
 
     def test_custom_mirror_uses_default_web_layout(self) -> None:
         downloader = PackageDownloader(
@@ -214,30 +222,14 @@ class TestRewriteUrl:
             custom_mirrors=["https://m.internal/pypi"],
         )
         assert downloader._available_mirrors[0] == "https://m.internal/pypi"
-        assert downloader._available_mirrors[1] == (
-            "https://mirrors.huaweicloud.com/repository/pypi"
-        )
         assert downloader._available_mirrors[-1] == PackageDownloader.OFFICIAL_PYPI
 
-    def test_huawei_pinned_first_for_downloads(self) -> None:
-        """The designated primary mirror (Huawei Cloud) must start the list."""
+    def test_mirror_order_is_uniform_shuffle(self) -> None:
         downloader = PackageDownloader(requirements_content="", use_cn_mirrors=True)
-        assert downloader._available_mirrors[0] == (
-            "https://mirrors.huaweicloud.com/repository/pypi"
-        )
-        assert downloader._preferred_mirror_idx == 0
+        cn = downloader._available_mirrors[:-1]
+        assert sorted(cn) == sorted(PackageDownloader.PYPI_MIRRORS)
         assert downloader._available_mirrors[-1] == PackageDownloader.OFFICIAL_PYPI
-        assert len(downloader._available_mirrors) == 6  # 5 CN + official
-
-    def test_metadata_success_keeps_download_anchor(self) -> None:
-        """Metadata is served by other mirrors, but downloads stay Huawei-first."""
-        downloader = PackageDownloader(requirements_content="", use_cn_mirrors=True)
-        idx = downloader._available_mirrors.index("https://mirrors.aliyun.com/pypi")
-        downloader._preferred_mirror_idx = 0  # huawei
-        # Simulate what _fetch_metadata_cycle does NOT do: it must not move
-        # the pointer, so this only checks the initial anchor survives.
-        assert downloader._preferred_mirror_idx == 0
-        assert downloader._available_mirrors[idx] == "https://mirrors.aliyun.com/pypi"
+        assert len(downloader._available_mirrors) == 5  # 4 CN + official
 
     def test_custom_mirror_alone(self) -> None:
         downloader = PackageDownloader(
@@ -251,6 +243,15 @@ class TestRewriteUrl:
 
 
 class TestMisc:
+    def test_cleanup_stale_part_files(self, tmp_path) -> None:
+        (tmp_path / "pkg-1.0.whl.part").write_bytes(b"junk")
+        (tmp_path / "other.whl").write_bytes(b"keep")
+        downloader = PackageDownloader(requirements_content="", download_dir=tmp_path)
+        removed = downloader._cleanup_stale_part_files()
+        assert removed == 1
+        assert not (tmp_path / "pkg-1.0.whl.part").exists()
+        assert (tmp_path / "other.whl").exists()
+
     def test_compute_hash(self, tmp_path) -> None:
         target = tmp_path / "file.bin"
         target.write_bytes(b"hello world")

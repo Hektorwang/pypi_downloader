@@ -96,13 +96,10 @@ class PackageDownloader:
     # Built-in CN mirrors, all large commercial vendors plus the CERNET
     # aggregator, all HTTPS (plain HTTP would undermine the SHA-256 check,
     # since the hashes themselves come from metadata served over the same
-    # connection).
-    #
-    # The FIRST entry is the designated primary download mirror: Huawei Cloud
-    # has the freshest sync of the vendors, so every file download starts
-    # there. It does not proxy the PyPI JSON API, so the metadata cycle skips
-    # it (one fast 404) and is served by the other mirrors or the official
-    # fallback.
+    # connection). All four proxy the PyPI JSON API, so any of them can serve
+    # both metadata and package files. Huawei Cloud was evaluated and dropped
+    # from this list (2026-10): it has no JSON metadata endpoint; it remains
+    # usable via ``--mirror`` thanks to the layout mapping below.
     #
     # Individual university mirrors (TUNA, USTC, SJTU, ...) are deliberately
     # NOT listed: mirrors.cernet.edu.cn is the CERNET joint mirror — a
@@ -112,7 +109,6 @@ class PackageDownloader:
     # failed verification (163, ISCAS) or are no longer maintained (Baidu,
     # Qiniu, Douban) are omitted as well.
     PYPI_MIRRORS: list[str] = [
-        "https://mirrors.huaweicloud.com/repository/pypi",
         "https://mirrors.aliyun.com/pypi",
         "https://mirrors.cloud.tencent.com/pypi",
         "https://mirrors.cernet.edu.cn/pypi",
@@ -121,9 +117,10 @@ class PackageDownloader:
 
     # Per-mirror file layout. TUNA-style mirrors (aliyun, cernet) serve
     # package files under a "web/" prefix, while cloud-vendor mirrors (tencent,
-    # huawei, volces) serve them directly. Mirrors absent from this dict use
-    # the TUNA-style default (custom --mirror URLs, too). The JSON metadata
-    # endpoint is derived from the same prefix ("web/json/" vs "json/").
+    # volces, and huawei when passed via --mirror) serve them directly. Mirrors
+    # absent from this dict use the TUNA-style default (custom --mirror URLs,
+    # too). The JSON metadata endpoint is derived from the same prefix
+    # ("web/json/" vs "json/").
     _MIRROR_FILE_PREFIX = "web/packages/"
     _MIRROR_FILE_PREFIXES: dict[str, str] = {
         "https://mirrors.cloud.tencent.com/pypi": "packages/",
@@ -135,7 +132,7 @@ class PackageDownloader:
     PYPI_JSON_API = "https://pypi.org/pypi"
 
     DEFAULT_CONCURRENCY: int = 16
-    # Total attempts per file: 6 sites * 2 per site = 12 per cycle, ~2.5 cycles.
+    # Total attempts per file: 5 sites * 2 per site = 10 per cycle, ~3 cycles.
     DEFAULT_RETRIES: int = 32
     RETRIES_PER_MIRROR: int = 2  # Attempts per mirror before switching
     DOWNLOAD_CHUNK_SIZE: int = 1024 * 1024  # 1 MiB streamed per chunk
@@ -195,16 +192,13 @@ class PackageDownloader:
         self.use_cn_mirrors = use_cn_mirrors
 
         # Mirror order: custom mirrors first (explicitly provided, highest
-        # priority), then the built-in CN mirrors with the designated primary
-        # mirror (Huawei Cloud, PYPI_MIRRORS[0]) pinned first and the rest
-        # shuffled to spread load, with official PyPI always last as the
-        # final fallback.
+        # priority), then the built-in CN mirrors shuffled to spread load,
+        # with official PyPI always last as the final fallback.
         available: list[str] = list(custom_mirrors or [])
         if use_cn_mirrors:
-            primary = self.PYPI_MIRRORS[0]
-            rest = self.PYPI_MIRRORS[1:]
-            random.shuffle(rest)  # Spread load across the fallback mirrors.
-            available += [primary, *rest]
+            cn_mirrors = self.PYPI_MIRRORS.copy()
+            random.shuffle(cn_mirrors)  # Spread load across mirror sites.
+            available += cn_mirrors
         if not available:
             available = [self.OFFICIAL_PYPI]
         else:
@@ -524,8 +518,8 @@ class PackageDownloader:
         The JSON endpoint path follows each mirror's file layout
         (``web/json/`` or ``json/``, derived from ``_MIRROR_FILE_PREFIXES``).
         The preferred-mirror pointer that anchors file downloads is
-        deliberately not advanced here, so downloads keep starting from the
-        designated primary mirror even when it cannot serve metadata.
+        deliberately not advanced here: it only ever moves when downloads
+        fail, so metadata availability does not reorder the download order.
 
         Args:
             package_name: Package name without extras.
@@ -578,8 +572,9 @@ class PackageDownloader:
                 continue
 
             # Note: the preferred-mirror pointer is deliberately NOT moved
-            # here, so file downloads still start from the designated primary
-            # mirror (Huawei Cloud) even though it cannot serve metadata.
+            # here — it only ever moves on download failures (see
+            # download_file), so metadata availability does not reorder the
+            # download order.
             logger.debug(f"Metadata for {package_name} served by {mirror}")
             return metadata
 
@@ -1160,6 +1155,22 @@ class PackageDownloader:
     # Main entry
     # ------------------------------------------------------------------
 
+    def _cleanup_stale_part_files(self) -> int:
+        """Delete leftover ``.part`` temp files from crashed previous runs.
+
+        A hard kill (power loss, ``kill -9``) can leave ``.part`` files in the
+        download directory. They are harmless (the next download of the same
+        file overwrites them), but with large ``--all-versions`` sets they can
+        accumulate. Returns the number of files removed.
+        """
+        stale = sorted(self.download_dir.glob("*.part"))
+        for path in stale:
+            try:
+                path.unlink()
+            except OSError as e:
+                logger.debug(f"Could not remove stale partial file {path}: {e}")
+        return len(stale)
+
     def _write_url_list(self) -> None:
         """Write the collected canonical URLs to the URL list file (dry-run only)."""
         if self.download_urls:
@@ -1197,6 +1208,11 @@ class PackageDownloader:
         executor = ThreadPoolExecutor(max_workers=max_workers)
         loop.set_default_executor(executor)
         logger.info(f"Using {max_workers} threads for I/O operations")
+
+        # Remove .part leftovers from crashed runs before any downloads start.
+        stale_parts = await loop.run_in_executor(None, self._cleanup_stale_part_files)
+        if stale_parts:
+            logger.info(f"Removed {stale_parts} stale .part file(s) from previous runs")
 
         try:
             async with aiohttp.ClientSession(headers=headers) as self.session:

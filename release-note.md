@@ -1,6 +1,30 @@
 # Release Notes
 
-## Version=0.10.0
+## Version=0.10.1
+
+## v0.10.1 (2026-10-05)
+
+### Mirror List Cleanup and Robustness Fixes
+
+#### Changed
+
+- Huawei Cloud removed from the built-in mirror list. It is the only vendor
+  mirror without a PyPI JSON metadata endpoint, so it could never serve
+  metadata, and the primary-mirror pinning existed solely for it; the mirror
+  order is back to a uniform shuffle (4 CN sources + official fallback). It
+  remains usable via `--mirror https://mirrors.huaweicloud.com/repository/pypi`
+  (its file-layout mapping is kept for that case).
+- The resolver now rejects `--generate-hashes` in `extra_args` with a clear
+  error: hash-annotated output lines cannot be parsed into package pins, and
+  previously degraded into a silently empty run (exit 0, zero downloads).
+  Package hashes come from the PyPI JSON API at download time anyway.
+
+#### Fixed
+
+- Stale `.part` temp files from crashed runs are removed from the download
+  directory at startup.
+- Integration tests are gated behind `PYPI_DOWNLOADER_INTEGRATION=1` so
+  network-less environments no longer fail the suite; CI sets the variable.
 
 ## v0.10.0 (2026-10-02)
 

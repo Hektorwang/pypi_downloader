@@ -1,5 +1,6 @@
 """Unit and integration tests for DependencyResolver (uv backend)."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -8,7 +9,9 @@ import pytest
 
 from pypi_downloader.resolver import DependencyResolver
 
-# The integration smoke test needs a real uv binary (and network).
+# The integration smoke test needs a real uv binary (and network), and is
+# additionally gated behind PYPI_DOWNLOADER_INTEGRATION=1 so network-less
+# environments never fail the suite.
 _UV_AVAILABLE = (
     subprocess.run(
         [sys.executable, "-m", "uv", "--version"],
@@ -16,6 +19,7 @@ _UV_AVAILABLE = (
     ).returncode
     == 0
 )
+_INTEGRATION_ENABLED = os.environ.get("PYPI_DOWNLOADER_INTEGRATION") == "1"
 
 
 class TestBuildCommand:
@@ -46,11 +50,20 @@ class TestBuildCommand:
     def test_extra_args_forwarded(self) -> None:
         resolver = DependencyResolver(
             requirements_path=Path("requirements.txt"),
-            extra_args=["--generate-hashes", "--no-annotate"],
+            extra_args=["--upgrade", "--no-annotate"],
         )
         cmd = resolver._build_command()
-        assert "--generate-hashes" in cmd
+        assert "--upgrade" in cmd
         assert "--no-annotate" in cmd
+
+    def test_generate_hashes_is_rejected(self) -> None:
+        """--generate-hashes output cannot be parsed; reject it loudly."""
+        resolver = DependencyResolver(
+            requirements_path=Path("requirements.txt"),
+            extra_args=["--generate-hashes"],
+        )
+        with pytest.raises(ValueError, match="--generate-hashes"):
+            resolver.resolve()
 
     def test_no_piptools_references(self) -> None:
         resolver = DependencyResolver(requirements_path=Path("requirements.txt"))
@@ -60,7 +73,10 @@ class TestBuildCommand:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not _UV_AVAILABLE, reason="uv binary not available")
+@pytest.mark.skipif(
+    not (_UV_AVAILABLE and _INTEGRATION_ENABLED),
+    reason="uv not available or PYPI_DOWNLOADER_INTEGRATION not set to 1",
+)
 class TestResolveIntegration:
     def test_resolve_real_package(self, tmp_path: Path) -> None:
         """A real `uv pip compile` run against PyPI for a tiny package."""

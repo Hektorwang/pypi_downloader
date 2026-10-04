@@ -234,6 +234,8 @@ class TestFetchMetadata:
                     metadata = await downloader.fetch_metadata("six")
                 assert metadata is not None
                 assert metadata["info"]["name"] == "six"
+                # Metadata availability must not move the download anchor.
+                assert downloader._preferred_mirror_idx == 0
                 # Regression: the URL must be single-slash (the old code
                 # produced "web/json//six"); the mirror is tried first.
                 assert "/pypi/web/json/six" in requests

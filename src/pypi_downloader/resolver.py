@@ -96,6 +96,9 @@ class DependencyResolver:
         """Run uv and return the resolved requirements as a string.
 
         Raises:
+            ValueError: If extra_args contains ``--generate-hashes`` (hash
+                annotated output cannot be parsed; package hashes come from
+                the PyPI JSON API at download time instead).
             FileNotFoundError: If the uv dependency is not importable/usable.
             subprocess.CalledProcessError: If uv exits with a non-zero code
                 (resolution failure — e.g. a graph universal resolution cannot
@@ -103,6 +106,13 @@ class DependencyResolver:
                 documented fallback in that case).
             RuntimeError: If uv exceeds the timeout.
         """
+        if "--generate-hashes" in self.extra_args:
+            raise ValueError(
+                "--generate-hashes is not supported: hash-annotated output "
+                "cannot be parsed into package pins. Package hashes come from "
+                "the PyPI JSON API at download time instead."
+            )
+
         cmd = self._build_command()
 
         logger.info("=" * 60)

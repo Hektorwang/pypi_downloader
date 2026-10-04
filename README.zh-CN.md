@@ -27,7 +27,7 @@
 - 智能缓存：校验已有文件的哈希值，匹配则跳过下载（重复运行速度提升 100 倍）
 - 流式下载：文件以 1 MiB 分块流式写盘并原子重命名（GB 级 wheel 不会占满内存）
 - 高性能：异步并发下载（默认 16 路）+ 线程池处理文件 I/O
-- 国内友好：内置 5 个国内镜像源（阿里云、腾讯云、华为云、火山引擎、教育网联合镜像站）
+- 国内友好：内置 4 个国内镜像源（阿里云、腾讯云、火山引擎、教育网联合镜像站）
 - 镜像兼容：使用 pip User-Agent，避免被 PyPI 镜像拦截
 
 ---
@@ -36,7 +36,7 @@
 
 - 全版本下载：使用 `--all-versions` 下载每个包的所有 Python 3 版本
 - 最新补丁模式：使用 `--latest-patch` 只下载每个次版本的最新补丁版本（减少 60-70% 文件量）
-- 多镜像自动切换：某个镜像失败时自动切换到下一个（5 个国内镜像源 + 官方 PyPI）
+- 多镜像自动切换：某个镜像失败时自动切换到下一个（4 个国内镜像源 + 官方 PyPI）
 - 自定义镜像：通过可重复的 `--mirror` 参数使用自己的镜像（优先于内置列表）
 - 异步并发：数百个文件并行下载，不阻塞（默认 16 路，可配置）
 - 哈希校验：使用 PyPI API 哈希值对每个文件进行 SHA-256 完整性校验
@@ -98,7 +98,7 @@ usage: pypi-downloader [-h] [-r REQUIREMENT_FILE] [--dry-run]
                        [--version]
                        [requirements]
 
-PyPI Package Downloader v0.10.0 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
+PyPI Package Downloader v0.10.1 - Async downloader for building offline PyPI mirrors. Dependencies are always resolved automatically via uv (universal mode: one pin covering Windows / macOS / Linux).
 
 位置参数:
   requirements          requirements.txt 文件路径
@@ -248,10 +248,8 @@ pip install --index-url http://localhost:8080/simple/ numpy
 pypi-downloader -r requirements.txt --cn
 ```
 
-支持的镜像源（共 5 个；官方 PyPI 始终作为最后的备用镜像）：
-- 华为云、阿里云、腾讯云、教育网联合镜像站（CERNET）、火山引擎
-- 华为云是指定的首选下载镜像：包文件始终最先从华为云下载（各商业源中同步最及时）。它不代理 PyPI JSON API，元数据由其余镜像或官方兜底提供。
-- 其余镜像在启动时随机排序以分散负载
+支持的镜像源（共 4 个，启动时随机排序；官方 PyPI 始终作为最后的备用镜像）：
+- 阿里云、腾讯云、教育网联合镜像站（CERNET）、火山引擎
 - 教育网联合镜像站是 MirrorZ 聚合入口，会自动跳转到离你网络最近的参与高校镜像（清华 TUNA、中科大、上交大等）
 - 各镜像的文件路径布局（是否带 `web/` 前缀）由工具自动适配
 - 通过 `--mirror URL` 添加自己的镜像（可重复，优先于内置列表）
@@ -259,7 +257,7 @@ pypi-downloader -r requirements.txt --cn
 ### 已知局限
 
 - **全平台解析更严格**：依赖通过 `uv pip compile --universal` 解析，一份 pin 同时覆盖 Windows / macOS / Linux（特定平台的依赖会带环境标记输出并同样被下载——在 Linux 上解析 `tqdm` 会把 `colorama` 以 `sys_platform == 'win32'` 标记固定下来）。universal 解析比单平台解析更严格；极少数依赖图无法满足时，改为在每个目标平台上各运行一次本工具（已下载并校验通过的文件会自动跳过）。
-- **元数据来源**：使用 `--cn` 时，包元数据（版本、哈希）优先从国内镜像获取——多数镜像代理了 PyPI JSON API（端点路径与该镜像的文件布局一致；实测阿里云、腾讯云、火山引擎、教育网联合镜像站及其背后高校源均支持）。不支持该端点的镜像（华为云）会被自动跳过。官方 PyPI JSON API 仍作为最终裁决与兜底，因此"包不存在"依然能被准确判定，仅镜像可达的内网环境也能正常工作。
+- **元数据来源**：使用 `--cn` 时，包元数据（版本、哈希）优先从国内镜像获取——多数镜像代理了 PyPI JSON API（端点路径与该镜像的文件布局一致；实测阿里云、腾讯云、火山引擎、教育网联合镜像站及其背后高校源均支持），不支持该端点的镜像会被自动跳过。官方 PyPI JSON API 仍作为最终裁决与兜底，因此"包不存在"依然能被准确判定，仅镜像可达的内网环境也能正常工作。
 
 ---
 
